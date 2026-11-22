@@ -21,7 +21,7 @@ Lab de desenvolvimento agêntico: um board de cards ligado a agentes de IA e a u
 |---|---|
 | Board agêntico: cards, skills e agentes | Métricas (lead time, custo por card, taxa de sucesso por skill) |
 | Orquestrador com fila e estado dos runs | Controle de acesso (RBAC, SSO) |
-| Worker efêmero com o Claude Agent SDK | Multi-tenant |
+| Worker efêmero com o Claude Code headless | Multi-tenant |
 | PR, gates de CI e revisão humana | Merge automático |
 
 ## O ciclo de um card
