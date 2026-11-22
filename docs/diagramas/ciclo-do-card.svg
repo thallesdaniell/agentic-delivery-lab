@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg class="dg" xmlns="http://www.w3.org/2000/svg" viewBox="-16 -16 992 380" width="992" height="380" role="img" aria-label="Estados de um card: backlog, pronto com agente atribuído, executando, PR aberto, CI, em revisão e concluído após o merge. Se o CI ficar vermelho ou a revisão pedir mudanças, o card volta para executando. Erro do agente ou handoff inválido levam o run a falhou, sempre com um failure_code.">
+<style>
+  svg { --raised:#ffffff; --fg:#1c222a; --muted:#5a6572; --line:#c7ced6; --lane:#eaedf1; --accent:#b0520b; }
+  @media (prefers-color-scheme: dark) {
+    svg { --raised:#181d24; --fg:#e2e6eb; --muted:#95a0ac; --line:#39424c; --lane:#1f262e; --accent:#f0a23a; }
+  }
+  .bg { fill: var(--raised); }
+  .dg { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  text { fill: var(--fg); }
+  .t-title { font-family: "IBM Plex Sans", "Segoe UI", Helvetica, Arial, sans-serif; font-size: 14px; font-weight: 600; }
+  .t-sub, .t-label { fill: var(--muted); font-size: 11px; }
+  .t-acc { fill: var(--accent); }
+  .box { fill: var(--raised); stroke: var(--fg); stroke-width: 1.2; }
+  .box-acc { fill: var(--raised); stroke: var(--accent); stroke-width: 2; }
+  .zone { fill: none; stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 6 5; }
+  .edge { stroke: var(--fg); stroke-width: 1.4; fill: none; marker-end: url(#head); }
+  .edge-acc { stroke: var(--accent); stroke-width: 1.8; fill: none; marker-end: url(#head-acc); }
+  .edge-dash { stroke: var(--fg); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; marker-end: url(#head); }
+  .head { fill: var(--fg); }
+  .head-acc { fill: var(--accent); }
+</style>
+<defs>
+  <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="head" d="M0 0L10 5L0 10z"/></marker>
+  <marker id="head-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="head-acc" d="M0 0L10 5L0 10z"/></marker>
+</defs>
+<rect class="bg" x="-16" y="-16" width="992" height="380" rx="10"/>
+
+<text class="t-title" x="0" y="14">O ciclo de um card</text>
+<text class="t-sub" x="0" y="32">Em laranja, o caminho feliz; tracejado, os retornos e a falha.</text>
+
+<!-- Estados -->
+<rect class="box" x="0" y="80" width="112" height="56" rx="6"/>
+<text class="t-title" x="56" y="104" text-anchor="middle">Backlog</text>
+<text class="t-sub" x="56" y="122" text-anchor="middle">card criado</text>
+
+<rect class="box" x="140" y="80" width="112" height="56" rx="6"/>
+<text class="t-title" x="196" y="104" text-anchor="middle">Pronto</text>
+<text class="t-sub" x="196" y="122" text-anchor="middle">com agente</text>
+
+<rect class="box-acc" x="280" y="80" width="112" height="56" rx="6"/>
+<text class="t-title t-acc" x="336" y="104" text-anchor="middle">Executando</text>
+<text class="t-sub" x="336" y="122" text-anchor="middle">run ativo</text>
+
+<rect class="box" x="420" y="80" width="112" height="56" rx="6"/>
+<text class="t-title" x="476" y="104" text-anchor="middle">PR aberto</text>
+<text class="t-sub" x="476" y="122" text-anchor="middle">branch + PR</text>
+
+<rect class="box" x="560" y="80" width="112" height="56" rx="6"/>
+<text class="t-title" x="616" y="104" text-anchor="middle">CI</text>
+<text class="t-sub" x="616" y="122" text-anchor="middle">gates</text>
+
+<rect class="box" x="700" y="80" width="112" height="56" rx="6"/>
+<text class="t-title" x="756" y="104" text-anchor="middle">Em revisão</text>
+<text class="t-sub" x="756" y="122" text-anchor="middle">pessoa revisa</text>
+
+<rect class="box-acc" x="840" y="80" width="120" height="56" rx="6"/>
+<text class="t-title t-acc" x="900" y="104" text-anchor="middle">Concluído</text>
+<text class="t-sub" x="900" y="122" text-anchor="middle">merge feito</text>
+
+<!-- Caminho feliz -->
+<path class="edge-acc" d="M112 108H138"/>
+<path class="edge-acc" d="M252 108H278"/>
+<path class="edge-acc" d="M392 108H418"/>
+<path class="edge-acc" d="M532 108H558"/>
+<path class="edge-acc" d="M672 108H698"/>
+<path class="edge-acc" d="M812 108H838"/>
+<text class="t-label" x="126" y="70" text-anchor="middle">atribui</text>
+<text class="t-label" x="826" y="70" text-anchor="middle">merge</text>
+
+<!-- CI vermelho volta para executando -->
+<path class="edge-dash" d="M616 136V180H350V138"/>
+<text class="t-label" x="483" y="172" text-anchor="middle">CI vermelho: nova tentativa</text>
+
+<!-- Revisão pede mudanças -->
+<path class="edge-dash" d="M756 136V220H330V138"/>
+<text class="t-label" x="543" y="212" text-anchor="middle">revisão pede mudanças</text>
+
+<!-- Falha terminal -->
+<path class="edge-dash" d="M290 136V248"/>
+<text class="t-label" x="280" y="196" text-anchor="end">erro do agente ou</text>
+<text class="t-label" x="280" y="210" text-anchor="end">handoff inválido</text>
+
+<rect class="box" x="230" y="250" width="120" height="56" rx="6"/>
+<text class="t-title" x="290" y="274" text-anchor="middle">Falhou</text>
+<text class="t-sub" x="290" y="292" text-anchor="middle">com failure_code</text>
+
+<text class="t-sub" x="420" y="274">Cada run guarda estado, logs e o handoff do agente.</text>
+<text class="t-sub" x="420" y="292">Falha terminal nunca fica sem código.</text>
+</svg>

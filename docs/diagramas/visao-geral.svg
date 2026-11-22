@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg class="dg" xmlns="http://www.w3.org/2000/svg" viewBox="-16 -16 992 440" width="992" height="440" role="img" aria-label="Um card pronto no board dispara o orquestrador, que cria um run e sobe um worker efêmero. O worker carrega uma skill versionada, conversa com a API do Claude, faz push e abre um pull request no GitHub e devolve um handoff em JSON ao orquestrador. O pull request passa pelos gates de CI; se o CI falhar, o card volta ao agente. Com o CI verde, uma pessoa revisa e faz o merge, e o card é concluído no board.">
+<style>
+  svg { --raised:#ffffff; --fg:#1c222a; --muted:#5a6572; --line:#c7ced6; --lane:#eaedf1; --accent:#b0520b; }
+  @media (prefers-color-scheme: dark) {
+    svg { --raised:#181d24; --fg:#e2e6eb; --muted:#95a0ac; --line:#39424c; --lane:#1f262e; --accent:#f0a23a; }
+  }
+  .bg { fill: var(--raised); }
+  .dg { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  text { fill: var(--fg); }
+  .t-title { font-family: "IBM Plex Sans", "Segoe UI", Helvetica, Arial, sans-serif; font-size: 14px; font-weight: 600; }
+  .t-sub, .t-label { fill: var(--muted); font-size: 11px; }
+  .t-acc { fill: var(--accent); }
+  .box { fill: var(--raised); stroke: var(--fg); stroke-width: 1.2; }
+  .box-acc { fill: var(--raised); stroke: var(--accent); stroke-width: 2; }
+  .zone { fill: none; stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 6 5; }
+  .edge { stroke: var(--fg); stroke-width: 1.4; fill: none; marker-end: url(#head); }
+  .edge-acc { stroke: var(--accent); stroke-width: 1.8; fill: none; marker-end: url(#head-acc); }
+  .edge-dash { stroke: var(--fg); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; marker-end: url(#head); }
+  .head { fill: var(--fg); }
+  .head-acc { fill: var(--accent); }
+</style>
+<defs>
+  <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="head" d="M0 0L10 5L0 10z"/></marker>
+  <marker id="head-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="head-acc" d="M0 0L10 5L0 10z"/></marker>
+</defs>
+<rect class="bg" x="-16" y="-16" width="992" height="440" rx="10"/>
+
+<text class="t-title" x="0" y="14">Card → agente → PR → CI → merge</text>
+<text class="t-sub" x="0" y="32">Em laranja, o caminho do agente; tracejado, o que é condicional.</text>
+
+<!-- Linha 1: board, orquestrador, worker, Claude -->
+<rect class="box" x="0" y="60" width="150" height="80" rx="6"/>
+<text class="t-title" x="14" y="86">Board</text>
+<text class="t-sub" x="14" y="106">cards e critérios</text>
+<text class="t-sub" x="14" y="122">agente atribuído</text>
+
+<rect class="box" x="215" y="60" width="180" height="80" rx="6"/>
+<text class="t-title" x="229" y="86">Orquestrador</text>
+<text class="t-sub" x="229" y="106">fila e estado dos runs</text>
+<text class="t-sub" x="229" y="122">valida o handoff</text>
+
+<rect class="box-acc" x="465" y="60" width="220" height="80" rx="6"/>
+<text class="t-title t-acc" x="479" y="86">Worker efêmero</text>
+<text class="t-sub" x="479" y="106">um container por run</text>
+<text class="t-sub" x="479" y="122">skill + modelo + tools</text>
+
+<rect class="box" x="790" y="60" width="170" height="80" rx="6"/>
+<text class="t-title" x="804" y="86">Claude API</text>
+<text class="t-sub" x="804" y="106">decide a próxima</text>
+<text class="t-sub" x="804" y="122">tool a chamar</text>
+
+<!-- Linha 2: revisão, CI, GitHub, skills -->
+<rect class="box" x="0" y="250" width="150" height="80" rx="6"/>
+<text class="t-title" x="14" y="276">Revisão humana</text>
+<text class="t-sub" x="14" y="296">aprova e faz</text>
+<text class="t-sub" x="14" y="312">o merge</text>
+
+<rect class="box" x="215" y="250" width="180" height="80" rx="6"/>
+<text class="t-title" x="229" y="276">CI (gates)</text>
+<text class="t-sub" x="229" y="296">lint · typecheck</text>
+<text class="t-sub" x="229" y="312">testes obrigatórios</text>
+
+<rect class="box" x="465" y="250" width="220" height="80" rx="6"/>
+<text class="t-title" x="479" y="276">GitHub</text>
+<text class="t-sub" x="479" y="296">branch do card</text>
+<text class="t-sub" x="479" y="312">pull request</text>
+
+<rect class="box" x="790" y="250" width="170" height="80" rx="6"/>
+<text class="t-title" x="804" y="276">Skills</text>
+<text class="t-sub" x="804" y="296">SKILL.md versionado</text>
+<text class="t-sub" x="804" y="312">no repositório</text>
+
+<!-- Arestas da linha 1 -->
+<path class="edge-acc" d="M150 90H213"/>
+<text class="t-label" x="182" y="82" text-anchor="middle">dispara</text>
+
+<path class="edge-acc" d="M395 90H463"/>
+<text class="t-label" x="430" y="82" text-anchor="middle">cria run</text>
+
+<path class="edge" d="M465 118H397"/>
+<text class="t-label" x="430" y="134" text-anchor="middle">handoff</text>
+
+<path class="edge-acc" d="M685 85H788"/>
+<path class="edge" d="M790 108H687"/>
+<text class="t-label" x="737" y="78" text-anchor="middle">prompt</text>
+<text class="t-label" x="737" y="124" text-anchor="middle">tool calls</text>
+
+<!-- Skills sobe até o worker -->
+<path class="edge" d="M790 275H737V132H687"/>
+<text class="t-label" x="745" y="200">carrega</text>
+<text class="t-label" x="745" y="214">a skill</text>
+
+<!-- Worker abre o PR -->
+<path class="edge-acc" d="M575 140V248"/>
+<text class="t-label" x="585" y="200">push + PR</text>
+
+<!-- PR passa pelo CI, CI verde vai à revisão -->
+<path class="edge-acc" d="M465 290H397"/>
+<text class="t-label" x="430" y="282" text-anchor="middle">checks</text>
+
+<path class="edge-acc" d="M215 290H152"/>
+<text class="t-label" x="182" y="282" text-anchor="middle">verde</text>
+
+<!-- CI vermelho volta ao orquestrador -->
+<path class="edge-dash" d="M305 250V142"/>
+<text class="t-label" x="315" y="194">CI vermelho:</text>
+<text class="t-label" x="315" y="208">volta ao agente</text>
+
+<!-- Merge conclui o card -->
+<path class="edge-acc" d="M75 250V142"/>
+<text class="t-label" x="85" y="194">merge:</text>
+<text class="t-label" x="85" y="208">card concluído</text>
+
+<!-- Fora desta fase -->
+<rect class="zone" x="0" y="356" width="960" height="52" rx="6"/>
+<text class="t-sub" x="16" y="378">Fora desta fase: métricas (lead time, custo por card, sucesso por skill) e controle de acesso (RBAC, SSO).</text>
+<text class="t-sub" x="16" y="396">O merge é sempre de uma pessoa. Texto de card é dado para o agente, nunca instrução.</text>
+</svg>
