@@ -70,7 +70,7 @@
 
 <!-- CI vermelho volta para executando -->
 <path class="edge-dash" d="M616 136V180H350V138"/>
-<text class="t-label" x="483" y="172" text-anchor="middle">CI vermelho: nova tentativa</text>
+<text class="t-label" x="483" y="172" text-anchor="middle">CI vermelho: nova tentativa (até 2)</text>
 
 <!-- Revisão pede mudanças -->
 <path class="edge-dash" d="M756 136V220H330V138"/>

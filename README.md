@@ -26,7 +26,7 @@ Lab de desenvolvimento agêntico: um board de cards ligado a agentes de IA e a u
 
 ## O ciclo de um card
 
-![Estados de um card: backlog, pronto, executando, PR aberto, CI, em revisão e concluído. CI vermelho ou pedido de mudança na revisão voltam para executando. Erro do agente ou handoff inválido terminam em falhou, sempre com um código.](docs/diagramas/ciclo-do-card.svg)
+![Estados de um card: backlog, pronto, executando, PR aberto, CI, em revisão e concluído. CI vermelho (até 2 vezes) ou pedido de mudança na revisão voltam para executando. Erro do agente ou handoff inválido terminam em falhou, sempre com um código.](docs/diagramas/ciclo-do-card.svg)
 
 O card só anda quando um gate deixa: o run precisa entregar um handoff válido, o CI precisa ficar verde e uma pessoa precisa aprovar. CI vermelho e pedido de mudança na revisão devolvem o card ao agente. Qualquer falha terminal fica registrada com um código, para dar para contar e entender por que o agente parou.
 
@@ -44,14 +44,22 @@ Os diagramas seguem o tema claro ou escuro do leitor.
 
 O repositório tem só a base: licença, este README e os diagramas. Ainda não há código executável, e nenhuma parte foi validada em execução.
 
-## Próximos passos
+## Roadmap
 
-O roadmap vem a seguir e vai definir:
+O plano completo, com as decisões e os critérios de pronto de cada marco, está em [`docs/roadmap.md`](docs/roadmap.md). Em resumo:
 
-- a stack do orquestrador e do worker;
-- se o board é próprio ou começa sobre o GitHub Projects;
-- onde o agente roda (runner efêmero, container local, cloud);
-- o primeiro fluxo ponta a ponta, de um card até o merge.
+- **Stack:** orquestrador e board em Go; o agente é o Claude Code headless, num container por run.
+- **Board próprio**, com o Postgres como fonte da verdade; o GitHub fica com branch, PR e CI.
+- **Execução:** Docker local primeiro, Kubernetes Job depois.
+- **Repo-alvo** separado, em Python, onde o agente abre os PRs.
+- **Limites:** até 2 tentativas de correção com CI vermelho e um teto de custo por run.
+
+- [ ] M0: repo-alvo em Python com CI obrigatório e GitHub App
+- [ ] M1: o worker sozinho transforma um card em PR
+- [ ] M2: orquestrador com Postgres, fila e runs tipados
+- [ ] M3: board htmx
+- [ ] M4: ciclo fechado com CI, revisão e merge
+- [ ] M5: Kubernetes Job e webhook
 
 ## Licença
 
