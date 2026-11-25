@@ -42,11 +42,11 @@ Os diagramas seguem o tema claro ou escuro do leitor.
 
 ## Estado atual
 
-Em andamento: **M0**.
+**M0 concluído** em 24 de novembro de 2026:
 
-- O repositório-alvo [`agentic-delivery-target`](https://github.com/thallesdaniell/agentic-delivery-target) já existe: uma API de tarefas em Python com `pytest`, `ruff` e CI no GitHub Actions. A `main` exige PR e os checks `lint` e `test`, inclusive para o admin.
-- Em 24 de novembro de 2026, um PR com um teste quebrado de propósito ficou com `test` vermelho e estado `BLOCKED`, e foi fechado sem merge ([PR #1](https://github.com/thallesdaniell/agentic-delivery-target/pull/1)).
-- Falta criar o GitHub App, que é um passo manual: [`docs/github-app.md`](docs/github-app.md).
+- O repositório-alvo [`agentic-delivery-target`](https://github.com/thallesdaniell/agentic-delivery-target) é uma API de tarefas em Python com `pytest`, `ruff` e CI no GitHub Actions. A `main` exige PR e os checks `lint` e `test`, inclusive para o admin.
+- Um PR com um teste quebrado de propósito ficou com `test` vermelho e estado `BLOCKED`, e foi fechado sem merge ([PR #1](https://github.com/thallesdaniell/agentic-delivery-target/pull/1)).
+- O GitHub App ([`docs/github-app.md`](docs/github-app.md)) gera token de instalação, está instalado só no repo-alvo (o token alcança 1 repositório) e tem exatamente as permissões da tabela, sem acesso a workflows.
 
 Este repositório ainda não tem código executável.
 
@@ -60,7 +60,7 @@ O plano completo, com as decisões e os critérios de pronto de cada marco, est�
 - **Repo-alvo** separado, em Python, onde o agente abre os PRs.
 - **Limites:** até 2 tentativas de correção com CI vermelho e um teto de custo por run.
 
-- [ ] M0: repo-alvo em Python com CI obrigatório (feito) e GitHub App (pendente)
+- [x] M0: repo-alvo em Python com CI obrigatório e GitHub App
 - [ ] M1: o worker sozinho transforma um card em PR
 - [ ] M2: orquestrador com Postgres, fila e runs tipados
 - [ ] M3: board htmx
