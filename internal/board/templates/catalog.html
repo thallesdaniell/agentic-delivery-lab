@@ -1,0 +1,28 @@
+{{define "title"}}Catálogo{{end}}
+{{define "content"}}
+<h1>Catálogo</h1>
+<p class="lead">Agentes e skills vêm de <code>agents/</code> e <code>skills/</code> no repositório. A versão é o hash do conteúdo, e cada run guarda a versão que usou.</p>
+<h2>Agentes</h2>
+<table>
+  <thead><tr><th scope="col">Agente</th><th scope="col">Modelo</th><th scope="col">Teto</th><th scope="col">Skill</th><th scope="col">Tools</th><th scope="col">Versão</th></tr></thead>
+  <tbody>
+  {{range .Agents}}
+  <tr{{if not .Active}} class="inactive"{{end}}>
+    <td><strong>{{.Name}}</strong>{{if not .Active}} <span class="tag muted">inativo</span>{{end}}<br><small>{{.Description}}</small></td>
+    <td><code>{{.Model}}</code></td>
+    <td>{{usd .BudgetUSD}}</td>
+    <td>{{.Skill}} {{template "version" .SkillVersion}}</td>
+    <td><ul class="tools">{{range .Tools}}<li><code>{{.}}</code></li>{{end}}</ul></td>
+    <td>{{template "version" .Version}}</td>
+  </tr>
+  {{else}}<tr><td colspan="6" class="empty">Catálogo vazio.</td></tr>{{end}}
+  </tbody>
+</table>
+<h2>Skills</h2>
+{{range .Skills}}
+<details class="skill">
+  <summary><strong>{{.Name}}</strong> {{template "version" .Version}} <small>{{.Description}}</small></summary>
+  <pre class="log">{{.Content}}</pre>
+</details>
+{{end}}
+{{end}}

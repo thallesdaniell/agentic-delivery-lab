@@ -1,9 +1,12 @@
 // Comando adl: o binário do agentic-delivery-lab.
 //
 //	adl migrate                     aplica as migrations no Postgres
+//	adl catalog sync                copia agents/ e skills/ do repositório para o banco
 //	adl card create <card.json>     grava um card no backlog
+//	adl card assign <id> <agente>   atribui um agente do catálogo ao card
 //	adl card ready <id>             move o card para Pronto e enfileira um run
 //	adl card list                   lista os cards com o último run
+//	adl board                       sobe o board web (só fala com o Postgres)
 //	adl orchestrator                tira runs da fila, roda o worker e publica
 //	adl worker                      roda o agente para um card (sem credencial do GitHub)
 //	adl publish                     abre o PR do resultado do worker, como o GitHub App
@@ -12,8 +15,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -23,7 +28,9 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/thallesdaniell/agentic-delivery-lab/internal/board"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/card"
+	"github.com/thallesdaniell/agentic-delivery-lab/internal/catalog"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/dockerapi"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/orchestrator"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/publish"
@@ -50,6 +57,10 @@ func main() {
 		err = cmdCard(ctx, os.Args[2:])
 	case "orchestrator":
 		err = cmdOrchestrator(ctx)
+	case "board":
+		err = cmdBoard(ctx)
+	case "catalog":
+		err = cmdCatalog(ctx, os.Args[2:])
 	default:
 		usage()
 	}
@@ -85,18 +96,26 @@ func cmdWorker(ctx context.Context) error {
 			return err
 		}
 	}
+	// O agente congelado no run também chega por variável de ambiente. Sem ele, vale o catálogo da imagem.
+	var spec *catalog.Spec
+	if raw := os.Getenv("ADL_AGENT_SPEC"); raw != "" {
+		spec = &catalog.Spec{}
+		if err := json.Unmarshal([]byte(raw), spec); err != nil {
+			return fmt.Errorf("ADL_AGENT_SPEC inválido: %w", err)
+		}
+	}
 	outDir := env("ADL_OUT_DIR", "/out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err
 	}
 	res, err := worker.Run(ctx, worker.Config{
-		CardPath:  cardPath,
-		SkillsDir: env("ADL_SKILLS_DIR", "/lab/skills"),
-		WorkDir:   env("ADL_WORK_DIR", "/home/agent/work"),
-		OutDir:    outDir,
-		Model:     env("AGENT_MODEL", "claude-sonnet-5-5"),
-		BudgetUSD: envFloat("RUN_BUDGET_USD", 1.00),
-		Timeout:   envDuration("RUN_TIMEOUT", 20*time.Minute),
+		CardPath:     cardPath,
+		Spec:         spec,
+		CatalogDir:   env("ADL_CATALOG_DIR", "/lab"),
+		WorkDir:      env("ADL_WORK_DIR", "/home/agent/work"),
+		OutDir:       outDir,
+		BudgetCapUSD: envFloat("RUN_BUDGET_USD", 1.00),
+		Timeout:      envDuration("RUN_TIMEOUT", 20*time.Minute),
 	})
 	if err != nil {
 		return err
@@ -141,6 +160,70 @@ func cmdMigrate(ctx context.Context) error {
 	return nil
 }
 
+// syncCatalog lê o catálogo da imagem e copia para o banco.
+func syncCatalog(ctx context.Context, s *store.Store) (catalog.Catalog, error) {
+	cat, err := catalog.Load(env("ADL_CATALOG_DIR", "/lab"))
+	if err != nil {
+		return cat, fmt.Errorf("catálogo: %w", err)
+	}
+	return cat, s.SyncCatalog(ctx, cat)
+}
+
+func cmdCatalog(ctx context.Context, args []string) error {
+	if len(args) != 1 || args[0] != "sync" {
+		usage()
+	}
+	s, err := openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	if _, err := s.Migrate(ctx); err != nil {
+		return err
+	}
+	cat, err := syncCatalog(ctx, s)
+	if err != nil {
+		return err
+	}
+	for _, a := range cat.Agents {
+		fmt.Printf("agente %s %s (skill %s, %s, até US$ %.2f)\n", a.Name, a.Version, a.Skill, a.Model, a.BudgetUSD)
+	}
+	return nil
+}
+
+// cmdBoard sobe o board. Ele só fala com o Postgres: sem socket do Docker e sem segredo.
+func cmdBoard(ctx context.Context) error {
+	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	s, err := openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	if _, err := s.Migrate(ctx); err != nil {
+		return err
+	}
+	if _, err := syncCatalog(ctx, s); err != nil {
+		return err
+	}
+	b, err := board.New(s, env("TARGET_REPO", ""), log)
+	if err != nil {
+		return err
+	}
+	addr := env("BOARD_ADDR", ":8080")
+	srv := &http.Server{Addr: addr, Handler: b.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdown)
+	}()
+	log.Info("board no ar", "addr", addr)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
 func cmdCard(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		usage()
@@ -160,6 +243,11 @@ func cmdCard(ctx context.Context, args []string) error {
 			return err
 		}
 		fmt.Printf("card %s criado no backlog\n", c.ID)
+	case args[0] == "assign" && len(args) == 3:
+		if err := s.AssignAgent(ctx, args[1], args[2]); err != nil {
+			return err
+		}
+		fmt.Printf("card %s com o agente %s\n", args[1], args[2])
 	case args[0] == "ready" && len(args) == 2:
 		runID, err := s.MarkReady(ctx, args[1])
 		if err != nil {
@@ -172,9 +260,13 @@ func cmdCard(ctx context.Context, args []string) error {
 			return err
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "CARD\tSTATUS\tRUN\tFALHA\tCUSTO\tPR\tTÍTULO")
+		fmt.Fprintln(w, "CARD\tSTATUS\tAGENTE\tRUN\tFALHA\tCUSTO\tPR\tTÍTULO")
 		for _, v := range cards {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.ID, v.Status, deref(v.RunID, v.RunStatus), str(v.FailureCode), money(v.CostUSD), str(v.PRURL), v.Title)
+			agent := v.Agent
+			if agent == "" {
+				agent = "-"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.ID, v.Status, agent, deref(v.RunID, v.RunStatus), str(v.FailureCode), money(v.CostUSD), str(v.PRURL), v.Title)
 		}
 		return w.Flush()
 	default:
@@ -195,6 +287,11 @@ func cmdOrchestrator(ctx context.Context) error {
 	} else if len(applied) > 0 {
 		log.Info("migrations aplicadas", "names", applied)
 	}
+	cat, err := syncCatalog(ctx, s)
+	if err != nil {
+		return err
+	}
+	log.Info("catálogo sincronizado", "agents", len(cat.Agents), "skills", len(cat.Skills))
 	if n, err := s.RecoverInterrupted(ctx); err != nil {
 		return err
 	} else if n > 0 {
@@ -211,7 +308,6 @@ func cmdOrchestrator(ctx context.Context) error {
 			Image:  env("WORKER_IMAGE", "agentic-delivery-lab:dev"),
 			Env: []string{
 				"ANTHROPIC_API_KEY=" + must("ANTHROPIC_API_KEY"),
-				"AGENT_MODEL=" + env("AGENT_MODEL", "claude-sonnet-5-5"),
 				"RUN_BUDGET_USD=" + env("RUN_BUDGET_USD", "1.00"),
 				"RUN_TIMEOUT=" + timeout.String(),
 			},
@@ -230,7 +326,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, strings.TrimSpace(`
 uso:
   adl migrate
-  adl card create <card.json> | ready <id> | list
+  adl catalog sync
+  adl card create <card.json> | assign <id> <agente> | ready <id> | list
+  adl board
   adl orchestrator
   adl worker | adl publish`))
 	os.Exit(2)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/card"
+	"github.com/thallesdaniell/agentic-delivery-lab/internal/catalog"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/run"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/store"
 )
@@ -20,13 +21,20 @@ import (
 type Store interface {
 	ClaimRun(ctx context.Context) (*store.Claimed, error)
 	SetContainer(ctx context.Context, runID int64, containerID string) error
+	UpdateRunLog(ctx context.Context, runID int64, log string) error
 	FinishRun(ctx context.Context, runID int64, res run.Result, log string) error
 }
 
-// Executor roda o worker de um run e deixa result.json e changes.patch em outDir.
+// Hooks avisa o orquestrador do andamento do worker.
+type Hooks struct {
+	OnStart func(containerID string)
+	OnLog   func(tail string) // chamado periodicamente com o fim do log, enquanto o worker roda
+}
+
+// Executor roda o worker de um run com o agente congelado e deixa result.json e changes.patch em outDir.
 // Devolve o log do worker. Um erro de Executor é falha de infraestrutura, não do agente.
 type Executor interface {
-	Execute(ctx context.Context, runID int64, c card.Card, outDir string, onStart func(containerID string)) (log string, err error)
+	Execute(ctx context.Context, runID int64, c card.Card, spec catalog.Spec, outDir string, hooks Hooks) (log string, err error)
 }
 
 // Publisher abre o PR de um run que terminou com sucesso (publish.Run em produção).
@@ -51,7 +59,7 @@ func (o *Orchestrator) Tick(ctx context.Context) (bool, error) {
 	if err != nil || cl == nil {
 		return false, err
 	}
-	log := o.Log.With("run", cl.RunID, "card", cl.Card.ID)
+	log := o.Log.With("run", cl.RunID, "card", cl.Card.ID, "agent", cl.Spec.Agent)
 	log.Info("run iniciado")
 	res, workerLog := o.process(ctx, cl, log)
 	// O resultado é gravado mesmo se o contexto do loop foi cancelado no meio.
@@ -81,10 +89,17 @@ func (o *Orchestrator) process(ctx context.Context, cl *store.Claimed, log *slog
 
 	ectx, cancel := context.WithTimeout(ctx, o.Timeout)
 	defer cancel()
-	workerLog, err := o.Executor.Execute(ectx, cl.RunID, cl.Card, dir, func(id string) {
-		if err := o.Store.SetContainer(ctx, cl.RunID, id); err != nil {
-			log.Warn("não gravou o container do run", "err", err)
-		}
+	workerLog, err := o.Executor.Execute(ectx, cl.RunID, cl.Card, cl.Spec, dir, Hooks{
+		OnStart: func(id string) {
+			if err := o.Store.SetContainer(ctx, cl.RunID, id); err != nil {
+				log.Warn("não gravou o container do run", "err", err)
+			}
+		},
+		OnLog: func(tail string) {
+			if err := o.Store.UpdateRunLog(ctx, cl.RunID, tail); err != nil {
+				log.Warn("não gravou o log do run", "err", err)
+			}
+		},
 	})
 	switch {
 	case errors.Is(err, ErrTimeout):

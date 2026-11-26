@@ -1,0 +1,25 @@
+{{define "title"}}Novo card{{end}}
+{{define "content"}}
+<h1>Novo card</h1>
+<p class="lead">O texto do card vai para o agente como dado, entre delimitadores, e nunca como instrução.</p>
+{{template "card-form" .}}
+{{end}}
+
+{{define "card-form"}}
+<form id="card-form" class="form" hx-post="/cards" hx-target="this" hx-swap="outerHTML">
+  {{template "error" .Error}}
+  <label>Id <input name="id" value="{{.Form.ID}}" required pattern="[A-Za-z0-9][A-Za-z0-9\-]{0,39}" placeholder="ADL-3"></label>
+  <label>Título <input name="title" value="{{.Form.Title}}" required maxlength="120"></label>
+  <label>Objetivo <textarea name="objective" rows="4" required maxlength="4000">{{.Form.Objective}}</textarea></label>
+  <label>Critérios de aceite <small>um por linha</small>
+    <textarea name="criteria" rows="6" required>{{.Form.Criteria}}</textarea></label>
+  <label>Repositório <input name="repo" value="{{.Form.Repo}}" required></label>
+  <label>Agente
+    <select name="agent">
+      <option value="">Sem agente (fica no backlog)</option>
+      {{range .Agents}}<option value="{{.Name}}"{{if eq .Name $.Form.Agent}} selected{{end}}>{{.Name}} · {{.Model}} · até {{usd .BudgetUSD}}</option>{{end}}
+    </select>
+  </label>
+  <div class="actions"><button class="button primary" type="submit">Criar no backlog</button></div>
+</form>
+{{end}}

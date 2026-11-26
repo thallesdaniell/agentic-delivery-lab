@@ -1,0 +1,12 @@
+{
+  "name": "python-dev",
+  "description": "Implementa funcionalidades pequenas em APIs Python com teste primeiro. Modelo mais capaz, para cards com mais de um critério.",
+  "skill": "python-feature",
+  "model": "claude-sonnet-5-5",
+  "budget_usd": 1.00,
+  "tools": [
+    "Read", "Edit", "Write", "Glob", "Grep",
+    "Bash(uv run pytest:*)", "Bash(uv run ruff:*)",
+    "Bash(git status:*)", "Bash(git diff:*)"
+  ]
+}

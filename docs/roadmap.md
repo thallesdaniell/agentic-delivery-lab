@@ -61,7 +61,7 @@ O M1 vem antes do orquestrador de propósito: ele responde se o agente entrega u
 
 ### M2: orquestrador (concluído)
 
-- Postgres com `card`, `run` e `delivery`, e migrations versionadas e embutidas no binário. Agente e Skill continuam como arquivos do repositório e ganham tabela junto com o catálogo do M3.
+- Postgres com `card`, `run` e `delivery`, e migrations versionadas e embutidas no binário. Agente e Skill ganharam tabela no M3.
 - Fila no Postgres: `FOR UPDATE SKIP LOCKED` para tirar da fila e um índice único que garante no máximo um run ativo por card.
 - O orquestrador sobe um container de worker por run pela API do Docker, sem bind mount: o card vai por variável de ambiente e a saída é copiada de `/out` quando o container para. O container roda sem capabilities, com `no-new-privileges` e limites de memória e processos.
 - A publicação roda dentro do orquestrador, que guarda a chave do App; o container do agente continua sem credencial do GitHub.
@@ -69,11 +69,14 @@ O M1 vem antes do orquestrador de propósito: ele responde se o agente entrega u
 
 **Pronto quando:** um card criado pela linha de comando termina em `PR aberto` ou em `Falhou` com código, sem intervenção manual.
 
-### M3: board
+### M3: board (concluído)
 
-- Board htmx: colunas por estado, criar card, atribuir agente, ver o run, os logs e o handoff.
-- Catálogo de skills e agentes (skill + modelo + tools) lido do repositório.
-- Mover o card para `Pronto` cria o run.
+- Board htmx renderizado pelo servidor, com colunas por estado e atualização a cada 3 segundos. Nele se cria o card, se atribui o agente, se move o card para Pronto e se veem os runs, o handoff, as tools negadas e o log do worker.
+- O board é um processo separado do orquestrador e só fala com o Postgres: sem socket do Docker e sem segredo. A escrita exige o header do htmx e a mesma origem, e as páginas saem com CSP restrita. O htmx vai embutido no binário.
+- Catálogo no repositório: `skills/<nome>/SKILL.md` e `agents/<nome>.json` (skill, modelo, teto de custo e tools). Um agente só restringe as tools do worker, nunca amplia. O orquestrador e o board copiam o catálogo para as tabelas `skill` e `agent` ao subir; agente que sai do repositório fica inativo.
+- A versão de agente e skill é o hash do conteúdo. Mover o card para Pronto congela o agente no run (`run.spec`), e o worker roda exatamente isso. O banco recusa run na fila sem agente congelado.
+- O card só vai para Pronto a partir do backlog ou de Falhou, e só com agente ativo. O teto de custo do run é o menor entre o do agente e o global (`RUN_BUDGET_USD`).
+- O orquestrador grava o fim do log do worker no banco a cada 3 segundos, e o board mostra o andamento sem acessar o Docker.
 
 **Pronto quando:** o fluxo do M2 sai inteiro da UI.
 

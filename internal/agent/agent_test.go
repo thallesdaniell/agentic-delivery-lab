@@ -87,3 +87,22 @@ func TestInterpretRecordsPermissionDenials(t *testing.T) {
 		t.Fatalf("denials = %v", out.Denials)
 	}
 }
+
+// O agente do catálogo restringe as tools; sem restrição, vale a lista do worker.
+func TestArgsUseTheAgentTools(t *testing.T) {
+	c := card.Card{ID: "X", Title: "t", AcceptanceCriteria: []string{"a"}}
+	argAfter := func(args []string, flag string) string {
+		for i, a := range args {
+			if a == flag && i+1 < len(args) {
+				return args[i+1]
+			}
+		}
+		return ""
+	}
+	if got := argAfter(Args(c, Config{Model: "m", BudgetUSD: 1, Tools: []string{"Read", "Grep"}}), "--allowedTools"); got != "Read,Grep" {
+		t.Fatalf("allowedTools = %q", got)
+	}
+	if got := argAfter(Args(c, Config{Model: "m", BudgetUSD: 1}), "--allowedTools"); got != strings.Join(AllowedTools, ",") {
+		t.Fatalf("allowedTools padrão = %q", got)
+	}
+}

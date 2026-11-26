@@ -1,6 +1,7 @@
 # Imagem única do lab. O mesmo binário `adl` roda em papéis separados:
 #   adl orchestrator -> tira runs da fila, sobe um container de worker por run e publica o PR (tem a chave do App)
 #   adl worker       -> roda o agente (Claude Code) só com a chave da Anthropic; não recebe credencial do GitHub
+#   adl board        -> board web; só fala com o Postgres
 
 FROM golang:1.24-bookworm AS build
 WORKDIR /src
@@ -30,5 +31,6 @@ ENV UV_PYTHON_INSTALL_DIR=/home/agent/.uv-python \
 
 FROM runtime AS final
 COPY skills /lab/skills
+COPY agents /lab/agents
 COPY --from=build /out/adl /usr/local/bin/adl
 ENTRYPOINT ["adl"]

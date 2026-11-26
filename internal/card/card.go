@@ -16,13 +16,14 @@ type Card struct {
 	Objective          string   `json:"objective"`
 	AcceptanceCriteria []string `json:"acceptance_criteria"`
 	Repo               string   `json:"repo"`
-	Skill              string   `json:"skill"`
+	// Agent é o agente do catálogo atribuído ao card. Pode ficar vazio no backlog.
+	Agent string `json:"agent,omitempty"`
 }
 
 var (
 	idPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,39}$`)
 	repoPattern  = regexp.MustCompile(`^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
-	skillPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,49}$`)
+	agentPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,49}$`)
 	nonSlug      = regexp.MustCompile(`[^a-z0-9]+`)
 )
 
@@ -62,8 +63,8 @@ func (c Card) Validate() error {
 		return fmt.Errorf("card inválido: de 1 a 20 critérios de aceite")
 	case !repoPattern.MatchString(c.Repo):
 		return fmt.Errorf("card inválido: repo %q fora do formato owner/name", c.Repo)
-	case !skillPattern.MatchString(c.Skill):
-		return fmt.Errorf("card inválido: skill %q fora do formato", c.Skill)
+	case c.Agent != "" && !agentPattern.MatchString(c.Agent):
+		return fmt.Errorf("card inválido: agent %q fora do formato", c.Agent)
 	}
 	for i, ac := range c.AcceptanceCriteria {
 		if strings.TrimSpace(ac) == "" || len(ac) > 500 {

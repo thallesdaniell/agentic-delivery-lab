@@ -1,0 +1,15 @@
+{
+  "id": "ADL-3",
+  "title": "Filtrar GET /tasks por done",
+  "objective": "Hoje GET /tasks devolve todas as tarefas. Quem consome a API precisa listar só as pendentes ou só as concluídas sem filtrar no cliente.",
+  "acceptance_criteria": [
+    "GET /tasks?done=true devolve só as tarefas concluídas",
+    "GET /tasks?done=false devolve só as pendentes",
+    "Sem o parâmetro, GET /tasks continua devolvendo todas",
+    "Há testes automatizados para os três comportamentos em tests/",
+    "uv run ruff check ., uv run ruff format --check . e uv run pytest passam",
+    "A tabela de endpoints do README documenta o parâmetro done"
+  ],
+  "repo": "thallesdaniell/agentic-delivery-target",
+  "agent": "python-dev"
+}

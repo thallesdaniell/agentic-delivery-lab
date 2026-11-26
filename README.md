@@ -2,7 +2,7 @@
 
 Lab de desenvolvimento agêntico: um board de cards ligado a agentes de IA e a uma esteira de entrega. Cada card pronto vira um run de agente, que trabalha num ambiente isolado, abre um pull request e passa pelos mesmos gates de CI que qualquer código escrito por uma pessoa. O merge continua sendo humano.
 
-> Projeto demonstrativo e em construção. Esta versão traz a base do repositório e o desenho da arquitetura; o código entra conforme o roadmap.
+> Projeto demonstrativo e em construção. O fluxo de card a PR já roda pelo board; o ciclo de CI, revisão e merge entra conforme o roadmap.
 
 ![Um card pronto no board dispara o orquestrador, que cria um run e sobe um worker efêmero. O worker carrega uma skill, conversa com a API do Claude, abre um pull request e devolve um handoff ao orquestrador. O PR passa pelo CI; vermelho volta ao agente, verde vai para a revisão humana, e o merge conclui o card.](docs/diagramas/visao-geral.svg)
 
@@ -42,15 +42,15 @@ Os diagramas seguem o tema claro ou escuro do leitor.
 
 ## Como um card vira PR
 
-O board ainda é a linha de comando (o board htmx é o M3), mas o fluxo já sai do banco:
+1. **No board** (`http://localhost:8090`), crie o card: objetivo, critérios de aceite e repositório. Ele nasce no backlog, com ou sem agente.
+2. **Atribua um agente** do catálogo. Um agente é uma skill (`skills/<nome>/SKILL.md`), um modelo, um teto de custo e um subconjunto das tools que o worker permite, definido em `agents/<nome>.json`.
+3. **Mova o card para Pronto.** Isso grava um run na fila com o agente e a skill daquele momento, com a versão de cada um (o hash do conteúdo). Se o catálogo mudar depois, o run continua rodando o que foi congelado. Um card nunca tem dois runs ativos.
+4. **O orquestrador** tira o run da fila e sobe um container de worker só para ele, sem bind mount, sem capabilities e com limites de memória e processos.
+5. **O worker** recebe só a chave da Anthropic. Clona o repo-alvo (público, sem token), instala as dependências e roda o Claude Code headless com a skill e as tools do agente: sem rede e sem push. O handoff sai em JSON validado por schema, e o log do worker aparece no board enquanto o run roda.
+6. **O orquestrador** copia o `result.json` e o `changes.patch` do container, confere de novo os caminhos do patch e, só então, usa a chave do GitHub App: commit como o bot do App, push, PR e revogação do token.
+7. O run, o custo, os turnos, o handoff, as tools negadas e o log vão para o banco, e o card passa para `PR aberto` ou para `Falhou` com um [código](docs/roadmap.md#códigos-de-falha). Um card que falhou pode voltar para Pronto.
 
-1. **`adl card create`** grava o card no Postgres, no backlog. **`adl card ready`** move o card para Pronto e enfileira um run; um card nunca tem dois runs ativos.
-2. **`adl orchestrator`** tira o run da fila e sobe um container de worker só para ele, sem bind mount, sem capabilities e com limites de memória e processos.
-3. **O worker** recebe só a chave da Anthropic. Clona o repo-alvo (público, sem token), instala as dependências e roda o Claude Code headless com a skill do card. O agente só pode ler, editar e rodar `ruff`, `pytest`, `git status` e `git diff`: sem rede, sem push. O handoff sai em JSON validado por schema.
-4. **O orquestrador** copia o `result.json` e o `changes.patch` do container, confere de novo os caminhos do patch e, só então, usa a chave do GitHub App: commit como o bot do App, push, PR e revogação do token.
-5. O run, o custo, os turnos, o handoff, as tools negadas e o log do worker vão para o banco, e o card passa para `pr_open` ou para `failed` com um [código](docs/roadmap.md#códigos-de-falha).
-
-O agente nunca coexiste com a credencial do GitHub.
+O agente nunca coexiste com a credencial do GitHub, e o board também não: ele é outro processo, que só fala com o Postgres. Ele não tem o socket do Docker nem segredo, e aceita escrita só do próprio board (header do htmx e mesma origem), porque mover um card para Pronto gasta dinheiro.
 
 ## Executar localmente
 
@@ -61,18 +61,21 @@ cp .env.example .env    # preencha App ID, Installation ID e ANTHROPIC_API_KEY
 docker compose up -d --build
 ```
 
-Isso sobe o Postgres e o orquestrador. Para mandar um card:
+Isso sobe o Postgres, o orquestrador e o board em `http://localhost:8090` (a variável `BOARD_PORT` muda a porta). Ao subir, o orquestrador e o board aplicam as migrations e copiam `agents/` e `skills/` para o banco.
+
+O mesmo fluxo existe na linha de comando:
 
 ```sh
 docker compose run --rm cli card create /lab/cards/delete-task.json
+docker compose run --rm cli card assign ADL-2 python-dev
 docker compose run --rm cli card ready ADL-2
 docker compose run --rm cli card list
 docker compose logs -f orchestrator
 ```
 
-O orquestrador fala com o Docker pelo socket e roda como root só por isso; o worker que roda o agente continua sem privilégios. Para rodar um card sem banco nem orquestrador, há o `scripts/run-card.sh`.
+O orquestrador fala com o Docker pelo socket e roda como root só por isso; o worker que roda o agente e o board continuam sem privilégios. Para rodar um card sem banco nem orquestrador, há o `scripts/run-card.sh`.
 
-Os testes rodam sem Go instalado. Os do banco precisam de um Postgres em `TEST_DATABASE_URL` e são pulados sem ele:
+Os testes rodam sem Go instalado. Os do banco precisam de um Postgres em `TEST_DATABASE_URL` e são pulados sem ele (eles apagam as tabelas: use um banco descartável):
 
 ```sh
 docker run --rm -v "$PWD":/src -w /src golang:1.24-bookworm go test ./...
@@ -80,14 +83,13 @@ docker run --rm -v "$PWD":/src -w /src golang:1.24-bookworm go test ./...
 
 ## Estado atual
 
-**M2 concluído** em 26 de novembro de 2026. O card `ADL-2` ([`cards/delete-task.json`](cards/delete-task.json), adicionar `DELETE /tasks/{id}`) saiu do banco e passou pelos dois caminhos:
+**M3 concluído** em 26 de novembro de 2026. O card `ADL-3` (filtrar `GET /tasks` por `done`) fez o fluxo inteiro pela UI: criado no board sem agente, recebeu o `python-dev`, foi movido para Pronto e virou o [PR #4](https://github.com/thallesdaniell/agentic-delivery-target/pull/4). O PR alterou 3 arquivos, passou em `lint` e `test`, custou US$ 0,04 e levou 10 turnos e 22 segundos, sem nenhuma tool negada. O log do worker apareceu no board enquanto o run rodava, e o run registrou as versões do agente e da skill que usou.
 
-- **Falha com código:** o primeiro run terminou como `workspace_error`, porque o worker sem root não conseguia criar `/out` na imagem. O card foi para `failed`, nada foi publicado, e o detalhe e o log do worker ficaram no banco.
-- **Sucesso:** corrigida a imagem, o mesmo card voltou para a fila e virou o [PR #3](https://github.com/thallesdaniell/agentic-delivery-target/pull/3): 4 arquivos, `lint` e `test` verdes, US$ 0,05, 13 turnos e 27 segundos. O card foi para `pr_open` e a entrega foi registrada com o número do PR.
+Marcos anteriores:
 
-Os 6 testes do banco rodam contra um Postgres real: fila sem duplicidade, falha sem código recusada pelo banco, recuperação de runs interrompidos e o registro da entrega. Não foi provocado um reinício do orquestrador no meio de um run real.
-
-Marcos anteriores: o M1 (o worker sozinho transformou o card `ADL-1` no [PR #2](https://github.com/thallesdaniell/agentic-delivery-target/pull/2)) e o M0 (repo-alvo com CI obrigatório e GitHub App).
+- **M2:** o card `ADL-2` saiu do banco pela linha de comando. Passou por uma falha com código (`workspace_error`) e, depois de corrigida a imagem, virou o [PR #3](https://github.com/thallesdaniell/agentic-delivery-target/pull/3).
+- **M1:** o worker sozinho transformou o card `ADL-1` no [PR #2](https://github.com/thallesdaniell/agentic-delivery-target/pull/2), que já passou pelo merge.
+- **M0:** repo-alvo com CI obrigatório e GitHub App.
 
 ## Roadmap
 
@@ -102,10 +104,10 @@ O plano completo, com as decisões e os critérios de pronto de cada marco, est�
 - [x] M0: repo-alvo em Python com CI obrigatório e GitHub App
 - [x] M1: o worker sozinho transforma um card em PR
 - [x] M2: orquestrador com Postgres, fila e runs tipados
-- [ ] M3: board htmx
+- [x] M3: board htmx e catálogo de agentes e skills
 - [ ] M4: ciclo fechado com CI, revisão e merge
 - [ ] M5: Kubernetes Job e webhook
 
 ## Licença
 
-[MIT](LICENSE)
+[MIT](LICENSE). O board embute o [htmx](https://htmx.org) 2.0.4, distribuído sob a licença 0BSD.

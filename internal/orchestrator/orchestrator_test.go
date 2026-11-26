@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/card"
+	"github.com/thallesdaniell/agentic-delivery-lab/internal/catalog"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/handoff"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/run"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/store"
@@ -19,6 +20,7 @@ type fakeStore struct {
 	queue    []*store.Claimed
 	finished map[int64]run.Result
 	conts    map[int64]string
+	logs     map[int64]string
 }
 
 func (f *fakeStore) ClaimRun(context.Context) (*store.Claimed, error) {
@@ -32,6 +34,11 @@ func (f *fakeStore) ClaimRun(context.Context) (*store.Claimed, error) {
 
 func (f *fakeStore) SetContainer(_ context.Context, id int64, c string) error {
 	f.conts[id] = c
+	return nil
+}
+
+func (f *fakeStore) UpdateRunLog(_ context.Context, id int64, l string) error {
+	f.logs[id] = l
 	return nil
 }
 
@@ -49,8 +56,12 @@ type fakeExecutor struct {
 	err    error
 }
 
-func (f fakeExecutor) Execute(_ context.Context, _ int64, _ card.Card, dir string, onStart func(string)) (string, error) {
-	onStart("container-1")
+func (f fakeExecutor) Execute(_ context.Context, _ int64, _ card.Card, spec catalog.Spec, dir string, h Hooks) (string, error) {
+	if spec.Agent != "python-dev" {
+		return "", errors.New("o executor deveria receber o agente congelado")
+	}
+	h.OnStart("container-1")
+	h.OnLog("clonando")
 	if f.err != nil {
 		return "log", f.err
 	}
@@ -64,8 +75,9 @@ func (f fakeExecutor) Execute(_ context.Context, _ int64, _ card.Card, dir strin
 
 func newOrch(t *testing.T, exec Executor, pub Publisher) (*Orchestrator, *fakeStore) {
 	st := &fakeStore{
-		queue:    []*store.Claimed{{RunID: 1, Card: card.Card{ID: "ADL-1", Title: "Adicionar GET /health"}}},
-		finished: map[int64]run.Result{}, conts: map[int64]string{},
+		queue: []*store.Claimed{{RunID: 1, Card: card.Card{ID: "ADL-1", Title: "Adicionar GET /health", Agent: "python-dev"},
+			Spec: catalog.Spec{Agent: "python-dev", Model: "m"}}},
+		finished: map[int64]run.Result{}, conts: map[int64]string{}, logs: map[int64]string{},
 	}
 	return &Orchestrator{Store: st, Executor: exec, Publish: pub, WorkDir: t.TempDir(), Timeout: time.Minute,
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil))}, st
@@ -87,7 +99,7 @@ func TestSuccessfulRunIsPublished(t *testing.T) {
 	if err != nil || !worked {
 		t.Fatalf("tick: %v %v", worked, err)
 	}
-	if r := st.finished[1]; r.Status != run.StatusSucceeded || r.PRNumber != 2 || st.conts[1] != "container-1" {
+	if r := st.finished[1]; r.Status != run.StatusSucceeded || r.PRNumber != 2 || st.conts[1] != "container-1" || st.logs[1] != "clonando" {
 		t.Fatalf("resultado: %+v containers %v", r, st.conts)
 	}
 }

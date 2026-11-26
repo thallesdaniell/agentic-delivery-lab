@@ -1,0 +1,63 @@
+{{define "title"}}{{.Card.ID}}{{end}}
+{{define "content"}}
+<p class="crumbs"><a href="/">Board</a> / {{.Card.ID}}</p>
+{{template "card-panel" .}}
+{{end}}
+
+{{define "card-panel"}}
+<section id="card-panel" class="panel"{{if .Active}} hx-get="/cards/{{.Card.ID}}/panel" hx-trigger="every 3s" hx-swap="outerHTML"{{end}}>
+  <header class="panel-head">
+    <h1><span class="card-id">{{.Card.ID}}</span> {{.Card.Title}}</h1>
+    {{template "status" .Card.Status}}
+  </header>
+  {{template "error" .Error}}
+  <div class="grid">
+    <div>
+      <h2>Objetivo</h2>
+      <p class="pre">{{.Card.Objective}}</p>
+      <h2>Critérios de aceite</h2>
+      <ul>{{range .Card.AcceptanceCriteria}}<li>{{.}}</li>{{end}}</ul>
+      <p class="meta">Repositório <code>{{.Card.Repo}}</code></p>
+    </div>
+    <aside class="side">
+      <h2>Agente</h2>
+      {{if .Movable}}
+      <form hx-post="/cards/{{.Card.ID}}/agent" hx-target="#card-panel" hx-swap="outerHTML" class="inline">
+        <select name="agent" aria-label="Agente">
+          {{if not .Card.Agent}}<option value="">Escolha um agente</option>{{end}}
+          {{range .Agents}}<option value="{{.Name}}"{{if eq .Name $.Card.Agent}} selected{{end}}>{{.Name}} · {{.Model}}</option>{{end}}
+        </select>
+        <button class="button small" type="submit">Atribuir</button>
+      </form>
+      {{if .Card.Agent}}
+      <button class="button primary" hx-post="/cards/{{.Card.ID}}/ready" hx-target="#card-panel" hx-swap="outerHTML">
+        {{if eq .Card.Status "failed"}}Tentar de novo{{else}}Mover para Pronto{{end}}
+      </button>
+      <p class="hint">Cria um run na fila com o agente e a skill de agora.</p>
+      {{end}}
+      {{else}}
+      <p>{{if .Card.Agent}}<span class="tag">{{.Card.Agent}}</span>{{else}}–{{end}}</p>
+      {{end}}
+      {{if .Card.PRURL}}<p><a class="button" href="{{str .Card.PRURL}}" rel="noreferrer">Abrir PR {{prnum .Card.PRURL}}</a></p>{{end}}
+    </aside>
+  </div>
+  <h2>Runs</h2>
+  {{if .Card.Runs}}
+  <table>
+    <thead><tr><th scope="col">Run</th><th scope="col">Status</th><th scope="col">Agente</th><th scope="col">Custo</th><th scope="col">Turnos</th><th scope="col">Duração</th><th scope="col">Entrega</th><th scope="col">Criado</th></tr></thead>
+    <tbody>
+    {{range .Card.Runs}}
+    <tr>
+      <td><a href="/runs/{{.ID}}">#{{.ID}}</a></td>
+      <td>{{template "status" .Status}}{{if .FailureCode}} <code>{{str .FailureCode}}</code>{{end}}</td>
+      <td>{{str .Agent}} {{if .AgentVersion}}{{template "version" str .AgentVersion}}{{end}}</td>
+      <td>{{money .CostUSD}}</td><td>{{int .NumTurns}}</td><td>{{secs .DurationSec}}</td>
+      <td>{{if .PRURL}}<a href="{{str .PRURL}}" rel="noreferrer">PR {{prnum .PRURL}}</a>{{else}}–{{end}}</td>
+      <td>{{when .CreatedAt}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<p class="empty">Nenhum run ainda.</p>{{end}}
+</section>
+{{end}}

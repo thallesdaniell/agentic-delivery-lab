@@ -1,0 +1,5 @@
+{{define "status"}}<span class="status s-{{.}}">{{label .}}</span>{{end}}
+
+{{define "error"}}{{if .}}<p class="alert" role="alert">{{.}}</p>{{end}}{{end}}
+
+{{define "version"}}<code class="version" title="versão: hash do conteúdo">{{.}}</code>{{end}}

@@ -1,0 +1,24 @@
+{{define "layout"}}<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"409","swap":true},{"code":"422","swap":true},{"code":"[45]..","swap":false,"error":true}]}'>
+<title>{{block "title" .}}Board{{end}} · agentic-delivery-lab</title>
+<link rel="stylesheet" href="/static/board.css">
+<script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">agentic-delivery-lab</a>
+  <nav>
+    <a href="/">Board</a>
+    <a href="/catalog">Catálogo</a>
+    <a class="button primary" href="/cards/new">Novo card</a>
+  </nav>
+</header>
+<main>
+{{block "content" .}}{{end}}
+</main>
+</body>
+</html>{{end}}

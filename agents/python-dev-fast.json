@@ -1,0 +1,12 @@
+{
+  "name": "python-dev-fast",
+  "description": "A mesma skill com um modelo mais rápido e barato, para cards pequenos e bem descritos.",
+  "skill": "python-feature",
+  "model": "claude-haiku-5-5",
+  "budget_usd": 0.50,
+  "tools": [
+    "Read", "Edit", "Write", "Glob", "Grep",
+    "Bash(uv run pytest:*)", "Bash(uv run ruff:*)",
+    "Bash(git status:*)", "Bash(git diff:*)"
+  ]
+}

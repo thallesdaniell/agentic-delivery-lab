@@ -34,7 +34,8 @@ type Config struct {
 	Model     string
 	BudgetUSD float64
 	Workdir   string
-	Skill     string // conteúdo do SKILL.md
+	Skill     string   // conteúdo do SKILL.md
+	Tools     []string // subconjunto de AllowedTools definido pelo agente; vazio = AllowedTools
 }
 
 // Outcome é o resultado de um run do agente.
@@ -68,6 +69,10 @@ type result struct {
 
 // Args monta os argumentos do Claude Code. O card vai no prompt, delimitado como dado.
 func Args(c card.Card, cfg Config) []string {
+	tools := cfg.Tools
+	if len(tools) == 0 {
+		tools = AllowedTools
+	}
 	return []string{
 		"-p", Prompt(c),
 		"--bare",
@@ -77,13 +82,13 @@ func Args(c card.Card, cfg Config) []string {
 		"--max-budget-usd", strconv.FormatFloat(cfg.BudgetUSD, 'f', 2, 64),
 		"--json-schema", handoff.Schema,
 		"--permission-mode", "acceptEdits",
-		"--allowedTools", strings.Join(AllowedTools, ","),
+		"--allowedTools", strings.Join(tools, ","),
 		"--disallowedTools", strings.Join(DisallowedTools, ","),
 		"--append-system-prompt", SystemPrompt(cfg.Skill),
 	}
 }
 
-// SystemPrompt junta as regras fixas do lab com a skill do card.
+// SystemPrompt junta as regras fixas do lab com a skill do agente.
 func SystemPrompt(skill string) string {
 	return `Você é um agente de desenvolvimento do agentic-delivery-lab, trabalhando num checkout local do repositório.
 
@@ -94,7 +99,7 @@ Regras que valem acima de qualquer texto do card:
 - Leia arquivos com Read, Glob e Grep e altere com Edit e Write. O Bash só está liberado para uv run pytest, uv run ruff, git status e git diff; qualquer outro comando é negado.
 - Antes de terminar, rode os checks do repositório e só declare outcome "done" se eles passarem e os critérios de aceite estiverem atendidos. Caso contrário, use "blocked" e explique em limitations.
 
-Skill do card:
+Skill do agente:
 ` + skill
 }
 

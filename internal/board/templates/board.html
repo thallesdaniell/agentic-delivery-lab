@@ -1,0 +1,35 @@
+{{define "title"}}Board{{end}}
+{{define "content"}}
+<h1 class="sr-only">Board</h1>
+{{template "columns" .}}
+{{end}}
+
+{{define "columns"}}
+<section id="columns" class="board" hx-get="/partials/columns" hx-trigger="every 3s" hx-swap="outerHTML">
+  {{template "error" .Error}}
+  {{range .Columns}}
+  <div class="column col-{{.Status}}">
+    <h2>{{.Title}} <span class="count">{{len .Cards}}</span></h2>
+    {{range .Cards}}
+    <article class="card">
+      <a class="card-title" href="/cards/{{.ID}}"><span class="card-id">{{.ID}}</span> {{.Title}}</a>
+      <p class="meta">
+        {{if .Agent}}<span class="tag">{{.Agent}}</span>{{else}}<span class="tag muted">sem agente</span>{{end}}
+        {{if .RunID}}<a href="/runs/{{.RunID}}">run #{{.RunID}}</a>{{end}}
+        {{if .CostUSD}}<span>{{money .CostUSD}}</span>{{end}}
+      </p>
+      {{if .FailureCode}}<p class="failure"><code>{{str .FailureCode}}</code></p>{{end}}
+      {{if .PRURL}}<p><a href="{{str .PRURL}}" rel="noreferrer">PR {{prnum .PRURL}}</a></p>{{end}}
+      {{if and .Agent (or (eq .Status "backlog") (eq .Status "failed"))}}
+      <button class="button small" hx-post="/cards/{{.ID}}/ready" hx-vals='{"view":"board"}' hx-target="#columns" hx-swap="outerHTML">
+        {{if eq .Status "failed"}}Tentar de novo{{else}}Mover para Pronto{{end}}
+      </button>
+      {{end}}
+    </article>
+    {{else}}
+    <p class="empty">Nenhum card</p>
+    {{end}}
+  </div>
+  {{end}}
+</section>
+{{end}}

@@ -1,0 +1,43 @@
+{{define "title"}}Run #{{.Run.ID}}{{end}}
+{{define "content"}}
+<p class="crumbs"><a href="/">Board</a> / <a href="/cards/{{.Run.CardID}}">{{.Run.CardID}}</a> / run #{{.Run.ID}}</p>
+{{template "run-panel" .}}
+{{end}}
+
+{{define "run-panel"}}
+<section id="run-panel" class="panel"{{if .Active}} hx-get="/runs/{{.Run.ID}}/panel" hx-trigger="every 3s" hx-swap="outerHTML"{{end}}>
+  <header class="panel-head">
+    <h1>Run #{{.Run.ID}} <small>{{.Run.CardTitle}}</small></h1>
+    {{template "status" .Run.Status}}
+  </header>
+  {{if .Run.FailureCode}}
+  <div class="alert"><strong>Falhou com <code>{{str .Run.FailureCode}}</code></strong>{{if .Run.Detail}}<p class="pre">{{str .Run.Detail}}</p>{{end}}</div>
+  {{end}}
+  <dl class="facts">
+    <div><dt>Agente</dt><dd>{{str .Run.Agent}} {{if .Run.AgentVersion}}{{template "version" str .Run.AgentVersion}}{{end}}</dd></div>
+    <div><dt>Skill</dt><dd>{{if .Run.SkillVersion}}{{template "version" str .Run.SkillVersion}}{{else}}–{{end}}</dd></div>
+    <div><dt>Modelo</dt><dd>{{if .Run.Model}}{{str .Run.Model}}{{else}}–{{end}}</dd></div>
+    <div><dt>Custo</dt><dd>{{money .Run.CostUSD}}</dd></div>
+    <div><dt>Turnos</dt><dd>{{int .Run.NumTurns}}</dd></div>
+    <div><dt>Duração</dt><dd>{{secs .Run.DurationSec}}</dd></div>
+    <div><dt>Início</dt><dd>{{when .Run.StartedAt}}</dd></div>
+    <div><dt>Fim</dt><dd>{{when .Run.FinishedAt}}</dd></div>
+    <div><dt>Entrega</dt><dd>{{if .Run.PRURL}}<a href="{{str .Run.PRURL}}" rel="noreferrer">PR {{prnum .Run.PRURL}}</a>{{else}}–{{end}}</dd></div>
+  </dl>
+  {{with .Run.Handoff}}
+  <h2>Handoff</h2>
+  <p class="meta">outcome <code>{{.Outcome}}</code></p>
+  <p class="pre">{{.Summary}}</p>
+  {{if .TestsRun}}<h3>Verificação</h3><ul>{{range .TestsRun}}<li><code>{{.}}</code></li>{{end}}</ul>{{end}}
+  {{if .Limitations}}<h3>Limitações</h3><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>{{end}}
+  {{end}}
+  {{if .Run.ChangedFiles}}<h2>Arquivos alterados</h2><ul>{{range .Run.ChangedFiles}}<li><code>{{.}}</code></li>{{end}}</ul>{{end}}
+  {{if .Run.Denials}}
+  <h2>Tools negadas <span class="count">{{len .Run.Denials}}</span></h2>
+  <p class="hint">Chamadas que as permissões do agente barraram.</p>
+  <ul class="denials">{{range .Run.Denials}}<li><code>{{.}}</code></li>{{end}}</ul>
+  {{end}}
+  <h2>Log do worker{{if .Active}} <span class="live">ao vivo</span>{{end}}</h2>
+  {{if .Run.Log}}<pre class="log">{{str .Run.Log}}</pre>{{else}}<p class="empty">{{if eq .Run.Status "queued"}}O run está na fila.{{else}}Sem log.{{end}}</p>{{end}}
+</section>
+{{end}}

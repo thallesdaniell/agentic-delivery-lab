@@ -11,5 +11,5 @@
     "A tabela de endpoints do README inclui o DELETE /tasks/{id}"
   ],
   "repo": "thallesdaniell/agentic-delivery-target",
-  "skill": "python-feature"
+  "agent": "python-dev"
 }

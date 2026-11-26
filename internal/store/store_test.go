@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/card"
+	"github.com/thallesdaniell/agentic-delivery-lab/internal/catalog"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/handoff"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/run"
 )
@@ -38,18 +39,30 @@ func testStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
-	if _, err := s.db.Exec(ctx, `DROP TABLE IF EXISTS delivery, run, card, schema_migration CASCADE`); err != nil {
+	if _, err := s.db.Exec(ctx, `DROP TABLE IF EXISTS delivery, run, card, agent, skill, schema_migration CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.SyncCatalog(ctx, testCatalog("skill v1")); err != nil {
+		t.Fatal(err)
+	}
 	return s
+}
+
+func testCatalog(skillBody string) catalog.Catalog {
+	sk := catalog.Skill{Name: "python-feature", Description: "d", Content: skillBody, Version: catalog.Version([]byte(skillBody))}
+	return catalog.Catalog{
+		Skills: []catalog.Skill{sk},
+		Agents: []catalog.Agent{{Name: "python-dev", Description: "d", Skill: sk.Name, Model: "claude-sonnet-5-5",
+			BudgetUSD: 1, Tools: []string{"Read", "Edit"}, Version: "a-" + sk.Version}},
+	}
 }
 
 func sampleCard(id string) card.Card {
 	return card.Card{ID: id, Title: "Adicionar GET /health", Objective: "o", AcceptanceCriteria: []string{"a"},
-		Repo: "thallesdaniell/agentic-delivery-target", Skill: "python-feature"}
+		Repo: "thallesdaniell/agentic-delivery-target", Agent: "python-dev"}
 }
 
 func TestMigrateIsIdempotent(t *testing.T) {
@@ -153,5 +166,120 @@ func TestRecoverInterrupted(t *testing.T) {
 	cards, _ := s.ListCards(ctx)
 	if cards[0].Status != CardFailed || *cards[0].FailureCode != "interrupted" {
 		t.Fatalf("card: %+v", cards[0])
+	}
+}
+
+func TestReadyRequiresAnActiveAgent(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	c := sampleCard("ADL-1")
+	c.Agent = ""
+	if err := s.CreateCard(ctx, c); err != nil {
+		t.Fatalf("card sem agente vai para o backlog: %v", err)
+	}
+	if _, err := s.MarkReady(ctx, "ADL-1"); !errors.Is(err, ErrNoAgent) {
+		t.Fatalf("sem agente não vai para Pronto: %v", err)
+	}
+	if err := s.AssignAgent(ctx, "ADL-1", "nao-existe"); !errors.Is(err, ErrUnknownAgent) {
+		t.Fatalf("agente inexistente: %v", err)
+	}
+	bad := sampleCard("ADL-2")
+	bad.Agent = "nao-existe"
+	if err := s.CreateCard(ctx, bad); !errors.Is(err, ErrUnknownAgent) {
+		t.Fatalf("criar com agente inexistente: %v", err)
+	}
+	if err := s.AssignAgent(ctx, "ADL-1", "python-dev"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MarkReady(ctx, "ADL-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AssignAgent(ctx, "ADL-1", "python-dev"); !errors.Is(err, ErrActiveRun) {
+		t.Fatalf("não troca o agente com run ativo: %v", err)
+	}
+}
+
+// O run roda o agente do momento em que entrou na fila, mesmo que o catálogo mude depois.
+func TestRunFreezesTheAgentSpec(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	_ = s.CreateCard(ctx, sampleCard("ADL-1"))
+	runID, err := s.MarkReady(ctx, "ADL-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncCatalog(ctx, testCatalog("skill v2")); err != nil {
+		t.Fatal(err)
+	}
+	cl, err := s.ClaimRun(ctx)
+	if err != nil || cl == nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if cl.Spec.SkillContent != "skill v1" || cl.Spec.Model != "claude-sonnet-5-5" || len(cl.Spec.Tools) != 2 || cl.Card.Agent != "python-dev" {
+		t.Fatalf("spec congelado errado: %+v", cl.Spec)
+	}
+	r, err := s.GetRun(ctx, runID)
+	if err != nil || r.SkillVersion == nil || *r.SkillVersion != catalog.Version([]byte("skill v1")) {
+		t.Fatalf("run sem a versão da skill: %+v %v", r, err)
+	}
+}
+
+func TestPROpenCardCannotGoBackToReady(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	_ = s.CreateCard(ctx, sampleCard("ADL-1"))
+	_, _ = s.MarkReady(ctx, "ADL-1")
+	cl, _ := s.ClaimRun(ctx)
+	res := run.Result{Status: run.StatusSucceeded, Branch: "b", PRNumber: 3, PRURL: "https://github.com/o/r/pull/3",
+		Handoff: &handoff.Handoff{Outcome: handoff.OutcomeDone, Summary: "s", TestsRun: []string{"t"}, Limitations: []string{}}}
+	if err := s.FinishRun(ctx, cl.RunID, res, "log"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MarkReady(ctx, "ADL-1"); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("card com PR aberto não volta para Pronto: %v", err)
+	}
+	d, err := s.GetCard(ctx, "ADL-1")
+	if err != nil || len(d.Runs) != 1 || d.Runs[0].PRNumber == nil || *d.Runs[0].PRNumber != 3 {
+		t.Fatalf("detalhe do card: %+v %v", d, err)
+	}
+}
+
+func TestCatalogSyncDeactivatesRemovedAgents(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	empty := testCatalog("skill v1")
+	empty.Agents = nil
+	if err := s.SyncCatalog(ctx, empty); err != nil {
+		t.Fatal(err)
+	}
+	agents, err := s.ListAgents(ctx)
+	if err != nil || len(agents) != 1 || agents[0].Active {
+		t.Fatalf("agente removido do repositório deveria ficar inativo: %+v %v", agents, err)
+	}
+	c := sampleCard("ADL-1")
+	if err := s.CreateCard(ctx, c); !errors.Is(err, ErrUnknownAgent) {
+		t.Fatalf("agente inativo não pode ser atribuído: %v", err)
+	}
+	if err := s.SyncCatalog(ctx, testCatalog("skill v1")); err != nil {
+		t.Fatal(err)
+	}
+	if agents, _ := s.ListAgents(ctx); !agents[0].Active {
+		t.Fatal("agente de volta ao repositório volta a ficar ativo")
+	}
+}
+
+func TestUpdateRunLogOnlyWhileRunning(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	_ = s.CreateCard(ctx, sampleCard("ADL-1"))
+	runID, _ := s.MarkReady(ctx, "ADL-1")
+	_ = s.UpdateRunLog(ctx, runID, "antes")
+	if r, _ := s.GetRun(ctx, runID); r.Log != nil {
+		t.Fatal("run na fila não tem log")
+	}
+	_, _ = s.ClaimRun(ctx)
+	_ = s.UpdateRunLog(ctx, runID, "clonando")
+	if r, _ := s.GetRun(ctx, runID); r.Log == nil || *r.Log != "clonando" {
+		t.Fatalf("log ao vivo: %+v", r.Log)
 	}
 }

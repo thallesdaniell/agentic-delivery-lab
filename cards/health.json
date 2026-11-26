@@ -9,5 +9,5 @@
     "A tabela de endpoints do README inclui o GET /health"
   ],
   "repo": "thallesdaniell/agentic-delivery-target",
-  "skill": "python-feature"
+  "agent": "python-dev"
 }

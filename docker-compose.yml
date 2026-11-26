@@ -1,5 +1,5 @@
 # Orquestrador local: Postgres + orquestrador. O orquestrador sobe um container de worker por run
-# pelo socket do Docker. Uso: scripts/adl.sh (ver README).
+# pelo socket do Docker; o board é outro processo, que só fala com o Postgres. Ver o README.
 name: agentic-delivery-lab
 
 services:
@@ -34,13 +34,26 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?defina no .env}
       GITHUB_APP_ID: ${GITHUB_APP_ID:?defina no .env}
       GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:?defina no .env}
-      AGENT_MODEL: ${AGENT_MODEL:-claude-sonnet-5-5}
       RUN_BUDGET_USD: ${RUN_BUDGET_USD:-1.00}
       RUN_TIMEOUT: ${RUN_TIMEOUT:-20m}
       WORKER_IMAGE: agentic-delivery-lab:dev
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${GITHUB_APP_PRIVATE_KEY_PATH:?defina no .env}:/run/secrets/github-app.pem:ro
+    restart: unless-stopped
+
+  # Board web em http://localhost:8090 (BOARD_PORT no .env muda a porta). Sem socket do Docker e sem segredo: só grava cards e runs na fila.
+  board:
+    image: agentic-delivery-lab:dev
+    command: ["board"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://adl:adl-local-only@postgres:5432/adl?sslmode=disable
+      TARGET_REPO: ${TARGET_REPO:-thallesdaniell/agentic-delivery-target}
+    ports:
+      - "127.0.0.1:${BOARD_PORT:-8090}:8080"
     restart: unless-stopped
 
   # Linha de comando contra o mesmo banco: docker compose run --rm cli card list

@@ -20,9 +20,10 @@ docker build -q -f deploy/Dockerfile -t "$IMAGE" . >/dev/null
 echo "== worker ($(basename "$CARD")) -> $OUT" >&2
 set +e
 docker run --rm \
-  -e ANTHROPIC_API_KEY -e RUN_BUDGET_USD -e AGENT_MODEL -e RUN_TIMEOUT \
+  -e ANTHROPIC_API_KEY -e RUN_BUDGET_USD -e RUN_TIMEOUT \
   -v "$PWD/$CARD:/lab/card.json:ro" \
   -v "$PWD/skills:/lab/skills:ro" \
+  -v "$PWD/agents:/lab/agents:ro" \
   -v "$OUT:/out" \
   "$IMAGE" worker
 WORKER_EXIT=$?
