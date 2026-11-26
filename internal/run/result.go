@@ -22,6 +22,7 @@ type Result struct {
 	ChangedFiles []string         `json:"changed_files,omitempty"`
 	Denials      []string         `json:"permission_denials,omitempty"`
 	Handoff      *handoff.Handoff `json:"handoff,omitempty"`
+	PRNumber     int              `json:"pr_number,omitempty"`
 	PRURL        string           `json:"pr_url,omitempty"`
 }
 

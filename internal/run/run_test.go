@@ -3,12 +3,7 @@ package run
 import "testing"
 
 func TestEveryDeclaredCodeIsValid(t *testing.T) {
-	codes := []FailureCode{
-		FailureHandoffInvalid, FailureAgentError, FailureAgentBlocked, FailureModelAPIError,
-		FailureBudgetExceeded, FailureTimeout, FailureNoChanges, FailureForbiddenPath,
-		FailureCardInvalid, FailureWorkspaceError, FailurePublishError,
-	}
-	for _, c := range codes {
+	for _, c := range AllFailureCodes {
 		if !c.Valid() {
 			t.Errorf("%q deveria ser válido", c)
 		}

@@ -1,0 +1,15 @@
+{
+  "id": "ADL-2",
+  "title": "Adicionar DELETE /tasks/{id}",
+  "objective": "Hoje não dá para remover uma tarefa. Adicione um endpoint que apague uma tarefa pelo id.",
+  "acceptance_criteria": [
+    "DELETE /tasks/{id} remove a tarefa e responde 204 sem corpo",
+    "DELETE de um id inexistente responde 404",
+    "Depois de apagada, GET /tasks/{id} responde 404 e a tarefa some de GET /tasks",
+    "Há testes automatizados para os três comportamentos em tests/",
+    "uv run ruff check ., uv run ruff format --check . e uv run pytest passam",
+    "A tabela de endpoints do README inclui o DELETE /tasks/{id}"
+  ],
+  "repo": "thallesdaniell/agentic-delivery-target",
+  "skill": "python-feature"
+}

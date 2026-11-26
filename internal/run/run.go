@@ -25,15 +25,22 @@ const (
 	FailureCardInvalid    FailureCode = "card_invalid"
 	FailureWorkspaceError FailureCode = "workspace_error"
 	FailurePublishError   FailureCode = "publish_error"
+	FailureInterrupted    FailureCode = "interrupted"
 )
+
+// AllFailureCodes é a lista fechada, na ordem em que aparece na documentação.
+var AllFailureCodes = []FailureCode{
+	FailureCardInvalid, FailureWorkspaceError, FailureHandoffInvalid, FailureAgentBlocked, FailureAgentError,
+	FailureModelAPIError, FailureBudgetExceeded, FailureTimeout, FailureNoChanges, FailureForbiddenPath,
+	FailurePublishError, FailureInterrupted,
+}
 
 // Valid diz se o código pertence à lista fechada.
 func (c FailureCode) Valid() bool {
-	switch c {
-	case FailureHandoffInvalid, FailureAgentError, FailureAgentBlocked, FailureModelAPIError,
-		FailureBudgetExceeded, FailureTimeout, FailureNoChanges, FailureForbiddenPath,
-		FailureCardInvalid, FailureWorkspaceError, FailurePublishError:
-		return true
+	for _, known := range AllFailureCodes {
+		if c == known {
+			return true
+		}
 	}
 	return false
 }

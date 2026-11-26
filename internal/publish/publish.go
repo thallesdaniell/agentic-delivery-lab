@@ -106,7 +106,7 @@ func publish(ctx context.Context, cfg Config, res *run.Result) *run.Error {
 	if err != nil {
 		return run.Fail(run.FailurePublishError, err.Error())
 	}
-	res.PRURL = pr.HTMLURL
+	res.PRNumber, res.PRURL = pr.Number, pr.HTMLURL
 	return nil
 }
 

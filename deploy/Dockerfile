@@ -1,10 +1,10 @@
-# Imagem única do lab. O mesmo binário `adl` roda em dois papéis, em containers separados:
-#   adl worker   -> roda o agente (Claude Code) só com a chave da Anthropic; não recebe credencial do GitHub
-#   adl publish  -> recebe a chave do GitHub App só depois que o agente terminou; aplica o patch, faz push e abre o PR
+# Imagem única do lab. O mesmo binário `adl` roda em papéis separados:
+#   adl orchestrator -> tira runs da fila, sobe um container de worker por run e publica o PR (tem a chave do App)
+#   adl worker       -> roda o agente (Claude Code) só com a chave da Anthropic; não recebe credencial do GitHub
 
 FROM golang:1.24-bookworm AS build
 WORKDIR /src
-COPY go.mod go.sum* ./
+COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
@@ -20,7 +20,8 @@ RUN apt-get update \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm cache clean --force
 COPY --from=uv /uv /uvx /usr/local/bin/
-RUN useradd --create-home --uid 10001 agent
+RUN useradd --create-home --uid 10001 agent \
+ && mkdir -p /out && chown agent:agent /out
 USER agent
 WORKDIR /home/agent
 ENV UV_PYTHON_INSTALL_DIR=/home/agent/.uv-python \
@@ -28,5 +29,6 @@ ENV UV_PYTHON_INSTALL_DIR=/home/agent/.uv-python \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 FROM runtime AS final
+COPY skills /lab/skills
 COPY --from=build /out/adl /usr/local/bin/adl
 ENTRYPOINT ["adl"]

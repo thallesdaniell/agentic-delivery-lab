@@ -40,27 +40,39 @@ Os diagramas seguem o tema claro ou escuro do leitor.
 - **Poucas tools, bem descritas.** Tool demais piora a escolha do agente.
 - **Estado tipado.** Todo run termina em um estado conhecido, e falha sempre carrega um código.
 
-## Como um card vira PR (M1)
+## Como um card vira PR
 
-Um run usa dois containers da mesma imagem, um depois do outro:
+O board ainda é a linha de comando (o board htmx é o M3), mas o fluxo já sai do banco:
 
-1. **`adl worker`** recebe só a chave da Anthropic. Clona o repo-alvo (público, sem token), instala as dependências e roda o Claude Code headless com a skill do card. O agente só pode ler, editar e rodar `ruff`, `pytest`, `git status` e `git diff`: sem rede, sem push. O handoff sai em JSON validado por schema, e o worker grava `result.json` e `changes.patch`.
-2. **`adl publish`** recebe só a chave do GitHub App, montada só leitura. Confere de novo os caminhos do patch, gera um token de instalação, faz o commit como o bot do App, o push e abre o PR, e revoga o token no fim.
+1. **`adl card create`** grava o card no Postgres, no backlog. **`adl card ready`** move o card para Pronto e enfileira um run; um card nunca tem dois runs ativos.
+2. **`adl orchestrator`** tira o run da fila e sobe um container de worker só para ele, sem bind mount, sem capabilities e com limites de memória e processos.
+3. **O worker** recebe só a chave da Anthropic. Clona o repo-alvo (público, sem token), instala as dependências e roda o Claude Code headless com a skill do card. O agente só pode ler, editar e rodar `ruff`, `pytest`, `git status` e `git diff`: sem rede, sem push. O handoff sai em JSON validado por schema.
+4. **O orquestrador** copia o `result.json` e o `changes.patch` do container, confere de novo os caminhos do patch e, só então, usa a chave do GitHub App: commit como o bot do App, push, PR e revogação do token.
+5. O run, o custo, os turnos, o handoff, as tools negadas e o log do worker vão para o banco, e o card passa para `pr_open` ou para `failed` com um [código](docs/roadmap.md#códigos-de-falha).
 
-O agente nunca coexiste com a credencial do GitHub. Qualquer falha encerra o run com um [código](docs/roadmap.md#códigos-de-falha), e nada é publicado.
+O agente nunca coexiste com a credencial do GitHub.
 
 ## Executar localmente
 
 Requisitos: Docker, o GitHub App configurado ([`docs/github-app.md`](docs/github-app.md)) e uma chave da Anthropic.
 
 ```sh
-cp .env.example .env   # preencha App ID, Installation ID e ANTHROPIC_API_KEY
-scripts/run-card.sh cards/health.json
+cp .env.example .env    # preencha App ID, Installation ID e ANTHROPIC_API_KEY
+docker compose up -d --build
 ```
 
-O script builda a imagem, roda o worker e, se ele terminar com sucesso, o publisher. A saída é o `result.json` do run, com custo, turnos, arquivos alterados, handoff e o link do PR.
+Isso sobe o Postgres e o orquestrador. Para mandar um card:
 
-Os testes rodam sem Go instalado:
+```sh
+docker compose run --rm cli card create /lab/cards/delete-task.json
+docker compose run --rm cli card ready ADL-2
+docker compose run --rm cli card list
+docker compose logs -f orchestrator
+```
+
+O orquestrador fala com o Docker pelo socket e roda como root só por isso; o worker que roda o agente continua sem privilégios. Para rodar um card sem banco nem orquestrador, há o `scripts/run-card.sh`.
+
+Os testes rodam sem Go instalado. Os do banco precisam de um Postgres em `TEST_DATABASE_URL` e são pulados sem ele:
 
 ```sh
 docker run --rm -v "$PWD":/src -w /src golang:1.24-bookworm go test ./...
@@ -68,16 +80,14 @@ docker run --rm -v "$PWD":/src -w /src golang:1.24-bookworm go test ./...
 
 ## Estado atual
 
-**M1 concluído** em 26 de novembro de 2026. O card [`cards/health.json`](cards/health.json) (`ADL-1`, adicionar `GET /health`) virou o [PR #2](https://github.com/thallesdaniell/agentic-delivery-target/pull/2) no repo-alvo:
+**M2 concluído** em 26 de novembro de 2026. O card `ADL-2` ([`cards/delete-task.json`](cards/delete-task.json), adicionar `DELETE /tasks/{id}`) saiu do banco e passou pelos dois caminhos:
 
-- Autor do PR e dos commits: `agentic-delivery-lab-worker[bot]`.
-- Diff de 3 arquivos (rota, teste e README), com `lint` e `test` verdes no CI.
-- O PR ficou bloqueado só pela aprovação humana, que o repo-alvo exige desde o M1.
-- O run custou US$ 0,04, com 12 turnos e 23 segundos (Claude Sonnet 5.5, teto de US$ 1,00).
+- **Falha com código:** o primeiro run terminou como `workspace_error`, porque o worker sem root não conseguia criar `/out` na imagem. O card foi para `failed`, nada foi publicado, e o detalhe e o log do worker ficaram no banco.
+- **Sucesso:** corrigida a imagem, o mesmo card voltou para a fila e virou o [PR #3](https://github.com/thallesdaniell/agentic-delivery-target/pull/3): 4 arquivos, `lint` e `test` verdes, US$ 0,05, 13 turnos e 27 segundos. O card foi para `pr_open` e a entrega foi registrada com o número do PR.
 
-O mapeamento das saídas do Claude Code para os códigos de falha (`budget_exceeded`, `model_api_error`, `handoff_invalid`, `agent_blocked`) foi conferido com saídas reais e está coberto por testes. Não foi provocado um handoff inválido num run completo.
+Os 6 testes do banco rodam contra um Postgres real: fila sem duplicidade, falha sem código recusada pelo banco, recuperação de runs interrompidos e o registro da entrega. Não foi provocado um reinício do orquestrador no meio de um run real.
 
-O M0 (repo-alvo com CI obrigatório e GitHub App) foi concluído em 24 de novembro de 2026.
+Marcos anteriores: o M1 (o worker sozinho transformou o card `ADL-1` no [PR #2](https://github.com/thallesdaniell/agentic-delivery-target/pull/2)) e o M0 (repo-alvo com CI obrigatório e GitHub App).
 
 ## Roadmap
 
@@ -91,7 +101,7 @@ O plano completo, com as decisões e os critérios de pronto de cada marco, est�
 
 - [x] M0: repo-alvo em Python com CI obrigatório e GitHub App
 - [x] M1: o worker sozinho transforma um card em PR
-- [ ] M2: orquestrador com Postgres, fila e runs tipados
+- [x] M2: orquestrador com Postgres, fila e runs tipados
 - [ ] M3: board htmx
 - [ ] M4: ciclo fechado com CI, revisão e merge
 - [ ] M5: Kubernetes Job e webhook

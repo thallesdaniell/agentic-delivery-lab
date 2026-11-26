@@ -1,0 +1,59 @@
+# Orquestrador local: Postgres + orquestrador. O orquestrador sobe um container de worker por run
+# pelo socket do Docker. Uso: scripts/adl.sh (ver README).
+name: agentic-delivery-lab
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: adl
+      POSTGRES_PASSWORD: adl-local-only
+      POSTGRES_DB: adl
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "adl"]
+      interval: 2s
+      retries: 20
+
+  orchestrator:
+    image: agentic-delivery-lab:dev
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: ["orchestrator"]
+    # root só para falar com o socket do Docker; o worker que roda o agente continua sem privilégios.
+    user: "0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://adl:adl-local-only@postgres:5432/adl?sslmode=disable
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?defina no .env}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:?defina no .env}
+      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:?defina no .env}
+      AGENT_MODEL: ${AGENT_MODEL:-claude-sonnet-5-5}
+      RUN_BUDGET_USD: ${RUN_BUDGET_USD:-1.00}
+      RUN_TIMEOUT: ${RUN_TIMEOUT:-20m}
+      WORKER_IMAGE: agentic-delivery-lab:dev
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${GITHUB_APP_PRIVATE_KEY_PATH:?defina no .env}:/run/secrets/github-app.pem:ro
+    restart: unless-stopped
+
+  # Linha de comando contra o mesmo banco: docker compose run --rm cli card list
+  cli:
+    image: agentic-delivery-lab:dev
+    profiles: ["cli"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://adl:adl-local-only@postgres:5432/adl?sslmode=disable
+    volumes:
+      - ./cards:/lab/cards:ro
+
+volumes:
+  pgdata:

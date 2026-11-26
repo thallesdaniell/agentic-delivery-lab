@@ -34,6 +34,7 @@ Todo run que termina como `Falhou` carrega um destes códigos. A lista vive em [
 | `no_changes` | O agente declarou `done` sem alterar nenhum arquivo |
 | `forbidden_path` | O agente alterou um caminho proibido, como `.github/` |
 | `publish_error` | O push ou a abertura do PR falharam |
+| `interrupted` | O orquestrador reiniciou com o run em andamento |
 | `ci_failed_after_retries` | O CI continuou vermelho depois das 2 tentativas de correção (M4) |
 
 ## Marcos
@@ -58,12 +59,13 @@ Todo run que termina como `Falhou` carrega um destes códigos. A lista vive em [
 
 O M1 vem antes do orquestrador de propósito: ele responde se o agente entrega um PR aceitável. Se não entregar, o resto não importa.
 
-### M2: orquestrador
+### M2: orquestrador (concluído)
 
-- Postgres com `Card`, `Skill`, `Agent`, `Run` e `Delivery`, e migrations versionadas.
-- Fila no Postgres: um run por card ativo, garantido por índice.
-- O orquestrador sobe o container do worker pela API do Docker, injeta o token do GitHub App e grava estado, logs e handoff.
-- Estados do run tipados; falha terminal sempre com código.
+- Postgres com `card`, `run` e `delivery`, e migrations versionadas e embutidas no binário. Agente e Skill continuam como arquivos do repositório e ganham tabela junto com o catálogo do M3.
+- Fila no Postgres: `FOR UPDATE SKIP LOCKED` para tirar da fila e um índice único que garante no máximo um run ativo por card.
+- O orquestrador sobe um container de worker por run pela API do Docker, sem bind mount: o card vai por variável de ambiente e a saída é copiada de `/out` quando o container para. O container roda sem capabilities, com `no-new-privileges` e limites de memória e processos.
+- A publicação roda dentro do orquestrador, que guarda a chave do App; o container do agente continua sem credencial do GitHub.
+- O banco recusa run `failed` sem `failure_code`, e um teste confere que a constraint e a lista de códigos em Go são as mesmas. Ao reiniciar, o orquestrador encerra os runs que estavam em andamento com `interrupted`.
 
 **Pronto quando:** um card criado pela linha de comando termina em `PR aberto` ou em `Falhou` com código, sem intervenção manual.
 
