@@ -12,23 +12,29 @@ Do zero até um card que vira PR, passa pelo CI e é concluído com o merge, pri
 | Fonte da verdade | **Postgres**; o GitHub fica só com branch, PR e CI | Um lugar só para o estado do card e do run |
 | Fila | **Postgres** (`SELECT … FOR UPDATE SKIP LOCKED`) | Sem Redis nem Temporal enquanto não houver necessidade |
 | Execução | **Docker local** primeiro, **Kubernetes Job** (`kind`) depois | Tudo sobe com `docker compose up`; o cluster entra quando o fluxo estiver provado |
-| Credencial | **GitHub App** instalado só no repo-alvo, token de instalação por run (expira em 1 h) | Nada de chave estática; o container só leva esse token e a chave do Claude |
+| Credencial | **GitHub App** instalado só no repo-alvo, token de instalação por run (expira em 1 h) | Nada de chave estática; o container do agente leva só a chave do Claude, e a do App fica num container separado que roda depois |
 | Repo-alvo | **Repositório separado em Python**, pequeno e com testes | O agente nunca mexe no próprio lab, e o alvo mostra que ele não depende da stack do lab |
 | CI vermelho | **Até 2 tentativas de correção**; na seguinte, o run termina como `Falhou` | Evita loop caro com um agente que não converge |
 | Custo | **Limite em dólares por run** desde o M1 | Um run fora de controle não pode virar uma conta surpresa |
 
 ## Códigos de falha
 
-Todo run que termina como `Falhou` carrega um destes códigos. A lista cresce conforme os marcos, mas nunca existe falha sem código.
+Todo run que termina como `Falhou` carrega um destes códigos. A lista vive em [`internal/run/run.go`](../internal/run/run.go), cresce conforme os marcos e nunca aceita falha sem código: o `result.json` com status `failed` e código fora da lista é recusado.
 
 | Código | Quando |
 |---|---|
+| `card_invalid` | O card não passa na validação ou a skill dele não existe |
+| `workspace_error` | Não foi possível clonar o repo ou instalar as dependências |
 | `handoff_invalid` | O agente terminou sem handoff ou com um handoff que não passa no schema |
-| `agent_error` | O Claude Code saiu com erro ou o container morreu |
+| `agent_blocked` | O agente declarou que não conseguiu cumprir o card (`outcome: blocked`) |
+| `agent_error` | O Claude Code saiu com erro ou não produziu saída |
 | `model_api_error` | A API do modelo recusou ou falhou (sem crédito, chave inválida, limite de taxa) |
-| `budget_exceeded` | O run passou do limite de custo |
+| `budget_exceeded` | O run passou do teto de custo |
 | `timeout` | O run passou do tempo máximo |
-| `ci_failed_after_retries` | O CI continuou vermelho depois das 2 tentativas de correção |
+| `no_changes` | O agente declarou `done` sem alterar nenhum arquivo |
+| `forbidden_path` | O agente alterou um caminho proibido, como `.github/` |
+| `publish_error` | O push ou a abertura do PR falharam |
+| `ci_failed_after_retries` | O CI continuou vermelho depois das 2 tentativas de correção (M4) |
 
 ## Marcos
 
@@ -40,7 +46,7 @@ Todo run que termina como `Falhou` carrega um destes códigos. A lista cresce co
 
 **Pronto quando:** um PR com teste quebrado fica bloqueado pelo CI.
 
-### M1: o worker sozinho
+### M1: o worker sozinho (concluído)
 
 - Imagem do worker: Claude Code, git e o runtime do repo-alvo.
 - Entrada: um card em JSON (objetivo, critérios de aceite, repositório) e a skill.

@@ -40,15 +40,44 @@ Os diagramas seguem o tema claro ou escuro do leitor.
 - **Poucas tools, bem descritas.** Tool demais piora a escolha do agente.
 - **Estado tipado.** Todo run termina em um estado conhecido, e falha sempre carrega um código.
 
+## Como um card vira PR (M1)
+
+Um run usa dois containers da mesma imagem, um depois do outro:
+
+1. **`adl worker`** recebe só a chave da Anthropic. Clona o repo-alvo (público, sem token), instala as dependências e roda o Claude Code headless com a skill do card. O agente só pode ler, editar e rodar `ruff`, `pytest`, `git status` e `git diff`: sem rede, sem push. O handoff sai em JSON validado por schema, e o worker grava `result.json` e `changes.patch`.
+2. **`adl publish`** recebe só a chave do GitHub App, montada só leitura. Confere de novo os caminhos do patch, gera um token de instalação, faz o commit como o bot do App, o push e abre o PR, e revoga o token no fim.
+
+O agente nunca coexiste com a credencial do GitHub. Qualquer falha encerra o run com um [código](docs/roadmap.md#códigos-de-falha), e nada é publicado.
+
+## Executar localmente
+
+Requisitos: Docker, o GitHub App configurado ([`docs/github-app.md`](docs/github-app.md)) e uma chave da Anthropic.
+
+```sh
+cp .env.example .env   # preencha App ID, Installation ID e ANTHROPIC_API_KEY
+scripts/run-card.sh cards/health.json
+```
+
+O script builda a imagem, roda o worker e, se ele terminar com sucesso, o publisher. A saída é o `result.json` do run, com custo, turnos, arquivos alterados, handoff e o link do PR.
+
+Os testes rodam sem Go instalado:
+
+```sh
+docker run --rm -v "$PWD":/src -w /src golang:1.24-bookworm go test ./...
+```
+
 ## Estado atual
 
-**M0 concluído** em 24 de novembro de 2026:
+**M1 concluído** em 26 de novembro de 2026. O card [`cards/health.json`](cards/health.json) (`ADL-1`, adicionar `GET /health`) virou o [PR #2](https://github.com/thallesdaniell/agentic-delivery-target/pull/2) no repo-alvo:
 
-- O repositório-alvo [`agentic-delivery-target`](https://github.com/thallesdaniell/agentic-delivery-target) é uma API de tarefas em Python com `pytest`, `ruff` e CI no GitHub Actions. A `main` exige PR e os checks `lint` e `test`, inclusive para o admin.
-- Um PR com um teste quebrado de propósito ficou com `test` vermelho e estado `BLOCKED`, e foi fechado sem merge ([PR #1](https://github.com/thallesdaniell/agentic-delivery-target/pull/1)).
-- O GitHub App ([`docs/github-app.md`](docs/github-app.md)) gera token de instalação, está instalado só no repo-alvo (o token alcança 1 repositório) e tem exatamente as permissões da tabela, sem acesso a workflows.
+- Autor do PR e dos commits: `agentic-delivery-lab-worker[bot]`.
+- Diff de 3 arquivos (rota, teste e README), com `lint` e `test` verdes no CI.
+- O PR ficou bloqueado só pela aprovação humana, que o repo-alvo exige desde o M1.
+- O run custou US$ 0,04, com 12 turnos e 23 segundos (Claude Sonnet 5.5, teto de US$ 1,00).
 
-Este repositório ainda não tem código executável.
+O mapeamento das saídas do Claude Code para os códigos de falha (`budget_exceeded`, `model_api_error`, `handoff_invalid`, `agent_blocked`) foi conferido com saídas reais e está coberto por testes. Não foi provocado um handoff inválido num run completo.
+
+O M0 (repo-alvo com CI obrigatório e GitHub App) foi concluído em 24 de novembro de 2026.
 
 ## Roadmap
 
@@ -61,7 +90,7 @@ O plano completo, com as decisões e os critérios de pronto de cada marco, est�
 - **Limites:** até 2 tentativas de correção com CI vermelho e um teto de custo por run.
 
 - [x] M0: repo-alvo em Python com CI obrigatório e GitHub App
-- [ ] M1: o worker sozinho transforma um card em PR
+- [x] M1: o worker sozinho transforma um card em PR
 - [ ] M2: orquestrador com Postgres, fila e runs tipados
 - [ ] M3: board htmx
 - [ ] M4: ciclo fechado com CI, revisão e merge

@@ -1,0 +1,13 @@
+{
+  "id": "ADL-1",
+  "title": "Adicionar GET /health",
+  "objective": "A API de tarefas não tem um endpoint de saúde. Adicione um GET /health que permita a um balanceador ou a um monitor confirmar que a aplicação está no ar, sem depender do armazenamento de tarefas.",
+  "acceptance_criteria": [
+    "GET /health responde 200 com o corpo JSON {\"status\": \"ok\"}",
+    "Existe teste automatizado para o endpoint em tests/",
+    "uv run ruff check ., uv run ruff format --check . e uv run pytest passam",
+    "A tabela de endpoints do README inclui o GET /health"
+  ],
+  "repo": "thallesdaniell/agentic-delivery-target",
+  "skill": "python-feature"
+}

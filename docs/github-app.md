@@ -40,8 +40,8 @@ mv ~/Downloads/agentic-delivery-lab-worker.*.private-key.pem ~/.config/agentic-d
 chmod 600 ~/.config/agentic-delivery-lab/github-app.pem
 ```
 
-Depois, copie o [`.env.example`](../.env.example) para `.env` e preencha o App ID e o Installation ID. O `.env` é ignorado pelo Git, e a chave nunca entra no repositório nem na imagem do worker: o orquestrador gera o token de instalação e injeta só o token no container.
+Depois, copie o [`.env.example`](../.env.example) para `.env` e preencha o App ID e o Installation ID. O `.env` é ignorado pelo Git, e a chave nunca entra no repositório nem na imagem. Ela é montada, só leitura, apenas no container de publicação, que roda depois que o agente terminou: o agente nunca coexiste com a credencial do GitHub.
 
-## Depois que o App existir
+## Aprovação humana
 
-Quando os PRs passarem a vir do App (M1), a branch protection do repo-alvo passa a exigir **1 aprovação**. Hoje ela exige PR e os checks `lint` e `test`, sem aprovação, porque o único autor é o dono do repositório, e o GitHub não deixa ninguém aprovar o próprio PR.
+Desde o M1, os PRs vêm do App, e a branch protection do repo-alvo exige **1 aprovação**, além dos checks `lint` e `test`. Quem aprova e faz o merge é uma pessoa.
