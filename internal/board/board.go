@@ -367,7 +367,28 @@ func actionResult(err error) (status int, msg string, ok bool) {
 }
 
 // runData é a página e o painel de um run.
-type runData struct{ Run *store.RunDetail }
+type runData struct {
+	Run *store.RunDetail
+	Log runLog
+}
+
+// CostPct é o custo do run em porcentagem do teto, para a barra (0 a 100).
+func (d runData) CostPct() float64 {
+	if d.Run.CostUSD == nil || d.Log.BudgetUSD == nil || *d.Log.BudgetUSD <= 0 {
+		return 0
+	}
+	return min(*d.Run.CostUSD / *d.Log.BudgetUSD * 100, 100)
+}
+
+// AgentTime é quanto o agente trabalhou, de "agente trabalhando" até a etapa seguinte.
+func (d runData) AgentTime() time.Duration {
+	for _, s := range d.Log.Steps {
+		if s.Tone == "agent" {
+			return s.Took
+		}
+	}
+	return 0
+}
 
 // Active diz se o run ainda não terminou (o painel se atualiza sozinho).
 func (d runData) Active() bool { return d.Run.Status == "queued" || d.Run.Status == "running" }
@@ -378,7 +399,14 @@ func (s *Server) loadRun(r *http.Request) (runData, error) {
 		return runData{}, store.ErrNotFound
 	}
 	run, err := s.store.GetRun(r.Context(), id)
-	return runData{Run: run}, err
+	if err != nil {
+		return runData{}, err
+	}
+	d := runData{Run: run}
+	if run.Log != nil {
+		d.Log = parseRunLog(*run.Log, d.Active(), time.Now())
+	}
+	return d, nil
 }
 
 func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
@@ -446,6 +474,9 @@ var funcs = template.FuncMap{
 	"usd":  func(v float64) string { return fmt.Sprintf("US$ %.2f", v) },
 	"int":  func(p *int) string { return deref(p) },
 	"secs": func(p *float64) string { return secs(p) },
+	"dur":  fmtDur,
+	"at":   fmtOffset,
+	"pctf": func(v float64) string { return strconv.FormatFloat(v, 'f', 2, 64) },
 	"when": func(t any) string {
 		switch v := t.(type) {
 		case time.Time:

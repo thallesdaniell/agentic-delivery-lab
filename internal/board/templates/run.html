@@ -13,13 +13,33 @@
   {{if .Run.FailureCode}}
   <div class="alert"><strong>Falhou com <code>{{str .Run.FailureCode}}</code></strong>{{if .Run.Detail}}<p class="pre">{{str .Run.Detail}}</p>{{end}}</div>
   {{end}}
+  <div class="stats">
+    <div class="stat">
+      <span class="stat-label">Custo</span>
+      <span class="stat-value">{{money .Run.CostUSD}}</span>
+      {{with .Log.BudgetUSD}}<span class="stat-sub">teto de {{usd .}}</span>
+      <svg class="meter" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true"><rect class="meter-track" width="100" height="6"/><rect class="meter-fill" width="{{pctf $.CostPct}}" height="6"/></svg>{{end}}
+    </div>
+    <div class="stat">
+      <span class="stat-label">Turnos</span>
+      <span class="stat-value">{{int .Run.NumTurns}}</span>
+      <span class="stat-sub">idas e voltas com o modelo</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Duração</span>
+      <span class="stat-value">{{if .Run.DurationSec}}{{secs .Run.DurationSec}}{{else if .Log.Total}}{{dur .Log.Total}}{{else}}–{{end}}</span>
+      {{with .AgentTime}}<span class="stat-sub">{{dur .}} com o agente</span>{{end}}
+    </div>
+    <div class="stat{{if .Run.Denials}} stat-fail{{end}}">
+      <span class="stat-label">Tools negadas</span>
+      <span class="stat-value">{{if .Active}}–{{else}}{{len .Run.Denials}}{{end}}</span>
+      <span class="stat-sub">barradas pelas permissões</span>
+    </div>
+  </div>
   <dl class="facts">
     <div><dt>Agente</dt><dd>{{str .Run.Agent}} {{if .Run.AgentVersion}}{{template "version" str .Run.AgentVersion}}{{end}}</dd></div>
     <div><dt>Skill</dt><dd>{{if .Run.SkillVersion}}{{template "version" str .Run.SkillVersion}}{{else}}–{{end}}</dd></div>
     <div><dt>Modelo</dt><dd>{{if .Run.Model}}{{str .Run.Model}}{{else}}–{{end}}</dd></div>
-    <div><dt>Custo</dt><dd>{{money .Run.CostUSD}}</dd></div>
-    <div><dt>Turnos</dt><dd>{{int .Run.NumTurns}}</dd></div>
-    <div><dt>Duração</dt><dd>{{secs .Run.DurationSec}}</dd></div>
     <div><dt>Início</dt><dd>{{when .Run.StartedAt}}</dd></div>
     <div><dt>Fim</dt><dd>{{when .Run.FinishedAt}}</dd></div>
     <div><dt>Entrega</dt><dd>{{if .Run.PRURL}}<a href="{{str .Run.PRURL}}" rel="noreferrer">PR {{prnum .Run.PRURL}}</a>{{else}}–{{end}}</dd></div>
@@ -37,7 +57,22 @@
   <p class="hint">Chamadas que as permissões do agente barraram.</p>
   <ul class="denials">{{range .Run.Denials}}<li><code>{{.}}</code></li>{{end}}</ul>
   {{end}}
-  <h2>Log do worker{{if .Active}} <span class="live">ao vivo</span>{{end}}</h2>
-  {{if .Run.Log}}<pre class="log">{{str .Run.Log}}</pre>{{else}}<p class="empty">{{if eq .Run.Status "queued"}}O run está na fila.{{else}}Sem log.{{end}}</p>{{end}}
+  <h2>Execução{{if .Active}} <span class="live">ao vivo</span>{{end}}</h2>
+  {{if .Log.Steps}}
+  {{if .Log.Segments}}
+  <svg class="phases" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="Tempo de cada etapa do run">{{range .Log.Segments}}<rect class="seg seg-{{or .Tone "step"}}" x="{{pctf .X}}" width="{{pctf .W}}" height="10"><title>{{.Label}}: {{dur .Took}}</title></rect>{{end}}</svg>
+  <ul class="legend">{{range .Log.Segments}}<li><span class="dot seg-{{or .Tone "step"}}"></span>{{.Label}} <span class="muted">{{dur .Took}}</span></li>{{end}}</ul>
+  {{end}}
+  <ol class="timeline">
+    {{range .Log.Steps}}<li class="step tone-{{or .Tone "step"}}{{if .Current}} current{{end}}">
+      <span class="step-at">{{at .Offset}}</span>
+      <div class="step-body">
+        <div class="step-head"><span class="step-msg">{{.Msg}}</span>{{if .Current}}<span class="step-took live">{{dur .Took}} até agora</span>{{else if .Took}}<span class="step-took">{{dur .Took}}</span>{{end}}</div>
+        {{if .Attrs}}<ul class="chips">{{range .Attrs}}<li><span>{{.Label}}</span> {{.Value}}</li>{{end}}</ul>{{end}}
+      </div>
+    </li>{{end}}
+  </ol>
+  {{else if not .Run.Log}}<p class="empty">{{if eq .Run.Status "queued"}}O run está na fila.{{else}}Sem log.{{end}}</p>{{end}}
+  {{if .Run.Log}}<details class="raw"><summary>Log bruto</summary><pre class="log">{{str .Run.Log}}</pre></details>{{end}}
 </section>
 {{end}}

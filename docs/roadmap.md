@@ -76,7 +76,7 @@ O M1 vem antes do orquestrador de propósito: ele responde se o agente entrega u
 - Catálogo no repositório: `skills/<nome>/SKILL.md` e `agents/<nome>.json` (skill, modelo, teto de custo e tools). Um agente só restringe as tools do worker, nunca amplia. O orquestrador e o board copiam o catálogo para as tabelas `skill` e `agent` ao subir; agente que sai do repositório fica inativo.
 - A versão de agente e skill é o hash do conteúdo. Mover o card para Pronto congela o agente no run (`run.spec`), e o worker roda exatamente isso. O banco recusa run na fila sem agente congelado.
 - O card só vai para Pronto a partir do backlog ou de Falhou, e só com agente ativo. O teto de custo do run é o menor entre o do agente e o global (`RUN_BUDGET_USD`).
-- O orquestrador grava o fim do log do worker no banco a cada 3 segundos, e o board mostra o andamento sem acessar o Docker.
+- O orquestrador grava o fim do log do worker no banco a cada 3 segundos, e o board mostra o andamento sem acessar o Docker. O board lê o log (logfmt) e mostra custo contra o teto, turnos, duração e tools negadas, uma barra com o tempo de cada etapa e a linha do tempo do worker; o log bruto fica recolhido.
 
 **Pronto quando:** o fluxo do M2 sai inteiro da UI.
 
