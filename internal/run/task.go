@@ -9,7 +9,7 @@ const (
 	KindAddressReview Kind = "address_review" // a revisão pediu mudanças: atende no mesmo PR
 )
 
-// Limites do ciclo de revisão. Passou deles, o card vai para Falhou com código.
+// Limites do ciclo de revisão. Atingido o limite, o botão de correção some e o card espera uma pessoa.
 const (
 	MaxCIAttempts   = 2
 	MaxReviewRounds = 3
@@ -35,4 +35,6 @@ type Task struct {
 	PRNumber int    `json:"pr_number,omitempty"`
 	PRURL    string `json:"pr_url,omitempty"`
 	Attempt  int    `json:"attempt,omitempty"` // 1 ou 2 no fix_ci; rodada da revisão no address_review
+	// Note é a orientação de quem pediu a correção no board, se houver.
+	Note string `json:"note,omitempty"`
 }

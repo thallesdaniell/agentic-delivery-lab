@@ -207,6 +207,29 @@ func (c Client) JobLog(ctx context.Context, token, repo string, jobID int64) (st
 	return string(raw), nil
 }
 
+// RerunFailedJobs roda de novo os jobs que falharam nos workflows dos checks informados (um pedido por
+// workflow run). Exige a permissão Actions: write no App.
+func (c Client) RerunFailedJobs(ctx context.Context, token, repo string, jobIDs []int64) error {
+	seen := map[int64]bool{}
+	for _, id := range jobIDs {
+		var job struct {
+			RunID int64 `json:"run_id"`
+		}
+		if err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/actions/jobs/"+strconv.FormatInt(id, 10), "token "+token, nil, &job); err != nil {
+			return err
+		}
+		if job.RunID == 0 || seen[job.RunID] {
+			continue
+		}
+		seen[job.RunID] = true
+		path := "/repos/" + repo + "/actions/runs/" + strconv.FormatInt(job.RunID, 10) + "/rerun-failed-jobs"
+		if err := c.do(ctx, http.MethodPost, path, "token "+token, map[string]any{}, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Review é uma revisão de PR.
 type Review struct {
 	ID    int64  `json:"id"`

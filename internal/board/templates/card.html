@@ -29,23 +29,35 @@
         </select>
         <button class="button small" type="submit">Atribuir</button>
       </form>
-      {{if .Card.Agent}}
-      <button class="button primary" hx-post="/cards/{{.Card.ID}}/ready" hx-target="#card-panel" hx-swap="outerHTML">
-        {{if eq .Card.Status "failed"}}Tentar de novo{{else}}Mover para Pronto{{end}}
-      </button>
-      <p class="hint">{{if .RetryRework}}Repete a última correção no mesmo PR, com o agente e a skill de agora.{{else}}Cria um run na fila com o agente e a skill de agora.{{end}}</p>
-      {{end}}
+      <div class="actions">
+        {{if canMove .Card.CardView "ready"}}<button class="button" hx-post="/cards/{{.Card.ID}}/move" hx-vals='{"to":"ready"}' hx-target="#card-panel" hx-swap="outerHTML">Pronto</button>{{end}}
+        {{if canMove .Card.CardView "backlog"}}<button class="button" hx-post="/cards/{{.Card.ID}}/move" hx-vals='{"to":"backlog"}' hx-target="#card-panel" hx-swap="outerHTML">Voltar ao backlog</button>{{end}}
+        {{if canMove .Card.CardView "running"}}<button class="button primary" hx-post="/cards/{{.Card.ID}}/move" hx-vals='{"to":"running"}' hx-target="#card-panel" hx-swap="outerHTML" hx-confirm="Executar {{.Card.ID}} com {{.Card.Agent}}{{with budget .Card.AgentBudgetUSD}} (teto {{.}}){{end}}?">{{if eq .Card.Status "failed"}}Executar de novo{{else}}Executar{{end}}</button>{{end}}
+      </div>
+      {{if canMove .Card.CardView "running"}}<p class="hint">Executar enfileira um run com o agente e a skill de agora. Pronto só marca o card como refinado.</p>{{end}}
       {{else}}
       <p>{{if .Card.Agent}}<span class="tag">{{.Card.Agent}}</span>{{else}}–{{end}}</p>
       {{end}}
       {{if .Card.PRURL}}<p><a class="button" href="{{str .Card.PRURL}}" rel="noreferrer">Abrir PR {{prnum .Card.PRURL}}</a></p>{{end}}
-      {{if or (eq .Card.Status "in_review") .Card.CIAttempts .Card.ReviewRounds}}
+      {{if eq .Card.Status "in_review"}}
       <h2>Revisão</h2>
-      {{if and (eq .Card.Status "in_review") .Card.Phase}}<p><span class="phase phase-{{phaseKey .Card.Phase}}">{{phase .Card.Phase}}</span></p>{{end}}
+      {{template "card-labels" .Card.CardView}}
       <dl class="mini">
         <div><dt>Correções do CI</dt><dd>{{.Card.CIAttempts}} de {{maxCI}}</dd></div>
         <div><dt>Rodadas de revisão</dt><dd>{{.Card.ReviewRounds}} de {{maxReview}}</dd></div>
       </dl>
+      {{if fixable .Card.CardView}}
+      <form class="fix" hx-post="/cards/{{.Card.ID}}/fix" hx-target="#card-panel" hx-swap="outerHTML" hx-confirm="Mandar a correção de {{.Card.ID}} para {{.Card.Agent}}?">
+        <label for="note">Orientação para o agente <span class="hint">(opcional)</span></label>
+        <textarea id="note" name="note" rows="3" maxlength="2000" hx-preserve="true" placeholder="Ex.: o teste está certo, corrija o código"></textarea>
+        <button class="button primary" type="submit">Corrigir com o agente</button>
+        <p class="hint">O agente recebe {{if eq (phaseKey .Card.Phase) "ci_failed"}}o log do CI{{else}}os comentários da revisão{{end}} e corrige no mesmo PR. O card continua em Em revisão.</p>
+      </form>
+      {{end}}
+      {{if and .Card.Phase (eq (phaseKey .Card.Phase) "ci_failed") (not (reworking .Card.CardView))}}
+      <button class="button" hx-post="/cards/{{.Card.ID}}/rerun-ci" hx-target="#card-panel" hx-swap="outerHTML">Rodar o CI de novo</button>
+      <p class="hint">Para falha de infraestrutura ou teste instável: refaz os jobs vermelhos sem gastar agente.</p>
+      {{end}}
       {{end}}
       {{if and (eq .Card.Status "failed") .Card.FailureCode}}
       <div class="alert"><strong><code>{{str .Card.FailureCode}}</code></strong>{{if .Card.FailureDetail}}<p>{{str .Card.FailureDetail}}</p>{{end}}</div>

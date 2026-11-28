@@ -7,6 +7,7 @@
 <title>{{block "title" .}}Board{{end}} · agentic-delivery-lab</title>
 <link rel="stylesheet" href="/static/board.css">
 <script src="/static/htmx.min.js" defer></script>
+<script src="/static/board.js" defer></script>
 </head>
 <body>
 <header class="top">
@@ -20,5 +21,14 @@
 <main>
 {{block "content" .}}{{end}}
 </main>
+<dialog id="confirm" class="confirm" aria-labelledby="confirm-msg">
+  <form method="dialog">
+    <p id="confirm-msg"></p>
+    <div class="actions">
+      <button class="button" value="cancel">Cancelar</button>
+      <button class="button primary" value="ok">Confirmar</button>
+    </div>
+  </form>
+</dialog>
 </body>
 </html>{{end}}

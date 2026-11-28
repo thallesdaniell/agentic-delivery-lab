@@ -3,3 +3,14 @@
 {{define "error"}}{{if .}}<p class="alert" role="alert">{{.}}</p>{{end}}{{end}}
 
 {{define "version"}}<code class="version" title="versão: hash do conteúdo">{{.}}</code>{{end}}
+
+{{define "card-labels"}}
+<p class="labels">
+  {{if reworking .}}<span class="phase phase-rework">corrigindo · {{kind .RunKind .RunAttempt}}</span>
+  {{else if and (eq .Status "in_review") .Phase}}<span class="phase phase-{{phaseKey .Phase}}">{{phase .Phase}}</span>{{end}}
+  {{if eq .Status "running"}}{{if and .RunStatus (eq (str .RunStatus) "queued")}}<span class="phase phase-rework">na fila</span>{{end}}{{end}}
+  {{if and (eq .Status "in_review") (not (reworking .)) .RunKind .RunStatus (eq (str .RunStatus) "failed")}}<span class="phase phase-ci_failed">correção falhou · <code>{{str .FailureCode}}</code></span>{{end}}
+  {{if limitHit .}}<span class="phase phase-ci_failed">limite de correções</span>{{end}}
+  {{if and (eq .Status "failed") .FailureCode}}<span class="failure"><code>{{str .FailureCode}}</code></span>{{end}}
+</p>
+{{end}}

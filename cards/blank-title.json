@@ -1,0 +1,13 @@
+{
+  "id": "ADL-5",
+  "title": "Recusar título só com espaços",
+  "objective": "Hoje um título só com espaços passa na validação (min_length=1) e deixa a tarefa sem título visível.",
+  "acceptance_criteria": [
+    "POST /tasks e PATCH /tasks/{id} com título vazio ou só com espaços devolvem 422",
+    "Espaços no começo e no fim do título são removidos antes de gravar",
+    "Testes cobrindo POST e PATCH",
+    "uv run ruff check ., uv run ruff format --check . e uv run pytest passam"
+  ],
+  "repo": "thallesdaniell/agentic-delivery-target",
+  "agent": "python-dev"
+}

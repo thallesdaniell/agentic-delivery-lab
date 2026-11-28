@@ -1,5 +1,8 @@
 // Package review acompanha o PR de cada card em revisão: CI, revisões e merge.
 // Decide é pura, e o Watcher busca no GitHub o que ela precisa e aplica a decisão no banco.
+//
+// No fluxo puxado o observador não devolve o card ao agente: ele atualiza a etiqueta e deixa pronta
+// a correção (log do CI ou comentários da revisão) para uma pessoa disparar com o botão.
 package review
 
 import (
@@ -14,11 +17,9 @@ import (
 type Action string
 
 const (
-	ActPhase         Action = "phase"          // só atualizar a fase do PR
-	ActComplete      Action = "complete"       // merge: card concluído
-	ActFail          Action = "fail"           // fim do ciclo com código
-	ActFixCI         Action = "fix_ci"         // devolver ao agente com o log do CI
-	ActAddressReview Action = "address_review" // devolver ao agente com os comentários da revisão
+	ActPhase    Action = "phase"    // atualizar a etiqueta (e a correção pronta, se houver)
+	ActComplete Action = "complete" // merge: card concluído
+	ActFail     Action = "fail"     // PR fechado sem merge
 )
 
 // Snapshot é o que o GitHub diz sobre o PR de um card agora.
@@ -35,12 +36,12 @@ type Decision struct {
 	Phase  store.ReviewPhase
 	Code   run.FailureCode
 	Detail string
-	Failed []githubapp.CheckRun // checks vermelhos, para o log que vai ao agente
-	Review *githubapp.Review    // revisão com pedido de mudanças, para os comentários
+	Failed []githubapp.CheckRun // checks vermelhos: o log vira a correção pronta do CI
+	Review *githubapp.Review    // pedido de mudanças ainda não mandado ao agente: vira a correção pronta da revisão
 }
 
 // Decide escolhe o próximo passo. A ordem importa: merge e fechamento primeiro, depois o CI,
-// e só com o CI verde a revisão. Um pedido de mudanças só dispara uma vez por revisão.
+// e só com o CI verde a revisão. Um pedido de mudanças já mandado ao agente não volta a ficar pendente.
 func Decide(s Snapshot) Decision {
 	switch {
 	case s.PR.Merged:
@@ -53,29 +54,16 @@ func Decide(s Snapshot) Decision {
 	case CIPending:
 		return Decision{Action: ActPhase, Phase: store.PhaseCIPending}
 	case CIFailed:
-		if s.Card.CIAttempts >= run.MaxCIAttempts {
-			return Decision{Action: ActFail, Code: run.FailureCIFailedAfterRetries, Failed: failed,
-				Detail: fmt.Sprintf("o CI continuou vermelho depois de %d tentativas de correção (%s)", s.Card.CIAttempts, names(failed))}
-		}
-		return Decision{Action: ActFixCI, Phase: store.PhaseCIFailed, Failed: failed}
+		return Decision{Action: ActPhase, Phase: store.PhaseCIFailed, Failed: failed}
 	}
-
 	changes, approved := reviewState(s.Reviews)
-	if changes != nil {
-		handled := s.Card.LastReviewID != nil && changes.ID <= *s.Card.LastReviewID
-		switch {
-		case handled:
-			// O agente já atendeu esta revisão; falta a pessoa revisar de novo.
-			return Decision{Action: ActPhase, Phase: store.PhaseAwaitingReview}
-		case s.Card.ReviewRounds >= run.MaxReviewRounds:
-			return Decision{Action: ActFail, Code: run.FailureReviewLimitReached, Review: changes,
-				Detail: fmt.Sprintf("a revisão pediu mudanças de novo depois de %d rodadas com o agente", s.Card.ReviewRounds)}
-		}
-		return Decision{Action: ActAddressReview, Phase: store.PhaseChangesRequested, Review: changes}
+	if changes != nil && (s.Card.LastReviewID == nil || changes.ID > *s.Card.LastReviewID) {
+		return Decision{Action: ActPhase, Phase: store.PhaseChangesRequested, Review: changes}
 	}
-	if approved {
+	if changes == nil && approved {
 		return Decision{Action: ActPhase, Phase: store.PhaseApproved}
 	}
+	// Sem revisão, ou com o pedido de mudanças já atendido pelo agente: falta uma pessoa revisar.
 	return Decision{Action: ActPhase, Phase: store.PhaseAwaitingReview}
 }
 

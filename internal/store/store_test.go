@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ import (
 // A constraint do banco e a lista em Go precisam ter os mesmos códigos.
 func TestMigrationFailureCodesMatchGo(t *testing.T) {
 	// A constraint vale como definida na última migration que a recria.
-	sql, err := migrations.ReadFile("migrations/003_review_cycle.sql")
+	sql, err := migrations.ReadFile("migrations/004_pull_flow.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,13 +81,13 @@ func TestQueueClaimsOnceAndBlocksDuplicateRuns(t *testing.T) {
 	if err := s.CreateCard(ctx, sampleCard("ADL-1")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.MarkReady(ctx, "ADL-1"); err != nil {
+	if _, err := s.Start(ctx, "ADL-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.MarkReady(ctx, "ADL-1"); !errors.Is(err, ErrActiveRun) {
+	if _, err := s.Start(ctx, "ADL-1"); !errors.Is(err, ErrActiveRun) {
 		t.Fatalf("segundo run ativo deveria ser recusado, veio %v", err)
 	}
-	if _, err := s.MarkReady(ctx, "NAO-EXISTE"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Start(ctx, "NAO-EXISTE"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("card inexistente: %v", err)
 	}
 	first, err := s.ClaimRun(ctx)
@@ -103,7 +104,7 @@ func TestFinishRunSuccessRecordsDelivery(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	_ = s.CreateCard(ctx, sampleCard("ADL-1"))
-	_, _ = s.MarkReady(ctx, "ADL-1")
+	_, _ = s.Start(ctx, "ADL-1")
 	cl, _ := s.ClaimRun(ctx)
 	res := run.Result{Status: run.StatusSucceeded, Branch: "agent/adl-1-x", Model: "m", CostUSD: 0.04, NumTurns: 12,
 		Handoff:  &handoff.Handoff{Outcome: handoff.OutcomeDone, Summary: "s", TestsRun: []string{"t"}, Limitations: []string{}},
@@ -128,7 +129,7 @@ func TestFinishRunFailureMovesCardAndAllowsRetry(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	_ = s.CreateCard(ctx, sampleCard("ADL-1"))
-	_, _ = s.MarkReady(ctx, "ADL-1")
+	_, _ = s.Start(ctx, "ADL-1")
 	cl, _ := s.ClaimRun(ctx)
 	res := run.Result{CardID: "ADL-1"}
 	res.Failed(run.Fail(run.FailureBudgetExceeded, "teto"))
@@ -139,7 +140,7 @@ func TestFinishRunFailureMovesCardAndAllowsRetry(t *testing.T) {
 	if cards[0].Status != CardFailed || *cards[0].FailureCode != "budget_exceeded" {
 		t.Fatalf("card: %+v", cards[0])
 	}
-	if _, err := s.MarkReady(ctx, "ADL-1"); err != nil {
+	if _, err := s.Start(ctx, "ADL-1"); err != nil {
 		t.Fatalf("depois de falhar, o card pode voltar à fila: %v", err)
 	}
 }
@@ -148,7 +149,7 @@ func TestDatabaseRejectsFailureWithoutCode(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	_ = s.CreateCard(ctx, sampleCard("ADL-1"))
-	runID, _ := s.MarkReady(ctx, "ADL-1")
+	runID, _ := s.Start(ctx, "ADL-1")
 	if _, err := s.db.Exec(ctx, `UPDATE run SET status = 'failed' WHERE id = $1`, runID); err == nil {
 		t.Fatal("o banco deveria recusar falha sem failure_code")
 	}
@@ -158,7 +159,7 @@ func TestRecoverInterrupted(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	_ = s.CreateCard(ctx, sampleCard("ADL-1"))
-	_, _ = s.MarkReady(ctx, "ADL-1")
+	_, _ = s.Start(ctx, "ADL-1")
 	_, _ = s.ClaimRun(ctx)
 	n, err := s.RecoverInterrupted(ctx)
 	if err != nil || n != 1 {
@@ -178,7 +179,7 @@ func TestReadyRequiresAnActiveAgent(t *testing.T) {
 	if err := s.CreateCard(ctx, c); err != nil {
 		t.Fatalf("card sem agente vai para o backlog: %v", err)
 	}
-	if _, err := s.MarkReady(ctx, "ADL-1"); !errors.Is(err, ErrNoAgent) {
+	if _, err := s.Start(ctx, "ADL-1"); !errors.Is(err, ErrNoAgent) {
 		t.Fatalf("sem agente não vai para Pronto: %v", err)
 	}
 	if err := s.AssignAgent(ctx, "ADL-1", "nao-existe"); !errors.Is(err, ErrUnknownAgent) {
@@ -192,7 +193,7 @@ func TestReadyRequiresAnActiveAgent(t *testing.T) {
 	if err := s.AssignAgent(ctx, "ADL-1", "python-dev"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.MarkReady(ctx, "ADL-1"); err != nil {
+	if _, err := s.Start(ctx, "ADL-1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.AssignAgent(ctx, "ADL-1", "python-dev"); !errors.Is(err, ErrActiveRun) {
@@ -205,7 +206,7 @@ func TestRunFreezesTheAgentSpec(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	_ = s.CreateCard(ctx, sampleCard("ADL-1"))
-	runID, err := s.MarkReady(ctx, "ADL-1")
+	runID, err := s.Start(ctx, "ADL-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,14 +230,14 @@ func TestCardInReviewCannotGoBackToReady(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	_ = s.CreateCard(ctx, sampleCard("ADL-1"))
-	_, _ = s.MarkReady(ctx, "ADL-1")
+	_, _ = s.Start(ctx, "ADL-1")
 	cl, _ := s.ClaimRun(ctx)
 	res := run.Result{Status: run.StatusSucceeded, Branch: "b", PRNumber: 3, PRURL: "https://github.com/o/r/pull/3",
 		Handoff: &handoff.Handoff{Outcome: handoff.OutcomeDone, Summary: "s", TestsRun: []string{"t"}, Limitations: []string{}}}
 	if err := s.FinishRun(ctx, cl.RunID, res, "log"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.MarkReady(ctx, "ADL-1"); !errors.Is(err, ErrInvalidTransition) {
+	if _, err := s.Start(ctx, "ADL-1"); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("card com PR aberto não volta para Pronto: %v", err)
 	}
 	d, err := s.GetCard(ctx, "ADL-1")
@@ -273,7 +274,7 @@ func TestUpdateRunLogOnlyWhileRunning(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	_ = s.CreateCard(ctx, sampleCard("ADL-1"))
-	runID, _ := s.MarkReady(ctx, "ADL-1")
+	runID, _ := s.Start(ctx, "ADL-1")
 	_ = s.UpdateRunLog(ctx, runID, "antes")
 	if r, _ := s.GetRun(ctx, runID); r.Log != nil {
 		t.Fatal("run na fila não tem log")
@@ -292,7 +293,7 @@ func openPR(t *testing.T, s *Store, id string) {
 	if err := s.CreateCard(ctx, sampleCard(id)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.MarkReady(ctx, id); err != nil {
+	if _, err := s.Start(ctx, id); err != nil {
 		t.Fatal(err)
 	}
 	cl, _ := s.ClaimRun(ctx)
@@ -306,120 +307,126 @@ func okRun() run.Result {
 		Handoff: &handoff.Handoff{Outcome: handoff.OutcomeDone, Summary: "s", TestsRun: []string{"t"}, Limitations: []string{}}}
 }
 
-func TestReworkGoesBackToTheAgentOnTheSamePR(t *testing.T) {
+func status(t *testing.T, s *Store, id string) *CardDetail {
+	t.Helper()
+	d, err := s.GetCard(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// Pronto não gasta nada: só entrar em Executando enfileira o run.
+func TestReadyDoesNotQueueAndRunningDoes(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	_ = s.CreateCard(ctx, sampleCard("ADL-1"))
+	if _, err := s.Move(ctx, "ADL-1", CardReady); err != nil {
+		t.Fatal(err)
+	}
+	if cl, _ := s.ClaimRun(ctx); cl != nil {
+		t.Fatal("Pronto não deveria enfileirar run")
+	}
+	if _, err := s.Move(ctx, "ADL-1", CardBacklog); err != nil {
+		t.Fatalf("Pronto volta ao backlog: %v", err)
+	}
+	if _, err := s.Move(ctx, "ADL-1", CardRunning); err != nil {
+		t.Fatal(err)
+	}
+	if d := status(t, s, "ADL-1"); d.Status != CardRunning {
+		t.Fatalf("card em Executando: %s", d.Status)
+	}
+	cl, _ := s.ClaimRun(ctx)
+	if cl == nil || cl.Task.Kind != run.KindImplement {
+		t.Fatalf("Executando enfileira a implementação: %+v", cl)
+	}
+	for _, to := range []CardStatus{CardBacklog, CardReady, CardRunning, CardInReview, CardDone} {
+		if _, err := s.Move(ctx, "ADL-1", to); err == nil {
+			t.Errorf("card em Executando não deveria ir para %s", to)
+		}
+	}
+}
+
+// A regra do board e a do banco são a mesma: o que AllowedMoves permite, Move aceita, e vice-versa.
+func TestMoveFollowsAllowedMoves(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	all := []CardStatus{CardBacklog, CardReady, CardRunning, CardInReview, CardDone, CardFailed}
+	for i, from := range []CardStatus{CardBacklog, CardReady, CardFailed} {
+		for j, to := range all {
+			id := fmt.Sprintf("ADL-%d%d", i, j)
+			_ = s.CreateCard(ctx, sampleCard(id))
+			if _, err := s.db.Exec(ctx, `UPDATE card SET status = $2 WHERE id = $1`, id, string(from)); err != nil {
+				t.Fatal(err)
+			}
+			_, err := s.Move(ctx, id, to)
+			if want := CanMove(from, true, to); (err == nil) != want {
+				t.Errorf("%s → %s: erro %v, a regra diz %v", from, to, err, want)
+			}
+		}
+	}
+}
+
+func TestReworkKeepsTheCardInReview(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	openPR(t, s, "ADL-1")
-	q, err := s.ReviewQueue(ctx)
-	if err != nil || len(q) != 1 || q[0].PRNumber != 3 {
-		t.Fatalf("fila de revisão: %+v %v", q, err)
+	if _, err := s.RequestRework(ctx, "ADL-1", ""); !errors.Is(err, ErrNothingToFix) {
+		t.Fatalf("sem CI vermelho nem pedido de mudanças, não há o que corrigir: %v", err)
 	}
-
-	if _, err := s.EnqueueRework(ctx, "ADL-1", run.KindFixCI, "log do CI", nil); err != nil {
+	if err := s.SetReviewState(ctx, "ADL-1", PhaseCIFailed, &Pending{Kind: run.KindFixCI, Feedback: "log do CI"}); err != nil {
 		t.Fatal(err)
 	}
+	if !status(t, s, "ADL-1").HasPending {
+		t.Fatal("a correção deveria ficar pronta para o botão")
+	}
+	if _, err := s.RequestRework(ctx, "ADL-1", "corrija o código"); err != nil {
+		t.Fatal(err)
+	}
+	if q, _ := s.ReviewQueue(ctx); len(q) != 0 {
+		t.Fatalf("com a correção rodando, o observador deixa o card em paz: %+v", q)
+	}
+	if err := s.SetReviewState(ctx, "ADL-1", PhaseAwaitingReview, nil); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("o observador não mexe no card com run ativo: %v", err)
+	}
 	cl, _ := s.ClaimRun(ctx)
-	want := run.Task{Kind: run.KindFixCI, Feedback: "log do CI", PRNumber: 3, PRURL: "https://github.com/o/r/pull/3", Attempt: 1}
-	if cl.Task != want || cl.Spec.Agent != "python-dev" {
-		t.Fatalf("run de correção: %+v %+v", cl.Task, cl.Spec)
+	want := run.Task{Kind: run.KindFixCI, Feedback: "log do CI", PRNumber: 3, PRURL: "https://github.com/o/r/pull/3", Attempt: 1, Note: "corrija o código"}
+	if cl.Task != want || status(t, s, "ADL-1").Status != CardInReview {
+		t.Fatalf("correção: %+v, card %s", cl.Task, status(t, s, "ADL-1").Status)
 	}
 	if err := s.FinishRun(ctx, cl.RunID, okRun(), "log"); err != nil {
 		t.Fatal(err)
 	}
-	d, _ := s.GetCard(ctx, "ADL-1")
-	if d.Status != CardInReview || d.CIAttempts != 1 || len(d.Runs) != 2 || d.Runs[0].Kind != run.KindFixCI || *d.PRNumber != 3 {
-		t.Fatalf("card depois da correção: %+v", d)
-	}
-	r, _ := s.GetRun(ctx, cl.RunID)
-	if r.Feedback == nil || *r.Feedback != "log do CI" {
-		t.Fatalf("o run guarda a entrada: %+v", r.Feedback)
+	d := status(t, s, "ADL-1")
+	if d.Status != CardInReview || *d.Phase != PhaseCIPending || d.HasPending || d.CIAttempts != 1 || d.Runs[0].Kind != run.KindFixCI {
+		t.Fatalf("depois da correção: %+v", d.CardView)
 	}
 }
 
-func TestReworkRespectsTheLimitAndOnlyLeavesReview(t *testing.T) {
+func TestFailedReworkLeavesTheCardInReview(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	openPR(t, s, "ADL-1")
-	for i := 1; i <= run.MaxCIAttempts; i++ {
-		if _, err := s.EnqueueRework(ctx, "ADL-1", run.KindFixCI, "log", nil); err != nil {
-			t.Fatalf("tentativa %d: %v", i, err)
-		}
-		if _, err := s.EnqueueRework(ctx, "ADL-1", run.KindFixCI, "log", nil); !errors.Is(err, ErrInvalidTransition) {
-			t.Fatalf("com o run na fila, o card não está em revisão: %v", err)
-		}
-		cl, _ := s.ClaimRun(ctx)
-		if err := s.FinishRun(ctx, cl.RunID, okRun(), ""); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := s.EnqueueRework(ctx, "ADL-1", run.KindFixCI, "log", nil); !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("passou do limite de tentativas: %v", err)
-	}
-}
-
-func TestCardCompletesOnMergeAndFailsWithCardCode(t *testing.T) {
-	s := testStore(t)
-	ctx := context.Background()
-	openPR(t, s, "ADL-1")
-	openPR(t, s, "ADL-2")
-	if err := s.SetReviewPhase(ctx, "ADL-1", PhaseApproved); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.CompleteCard(ctx, "ADL-1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.CompleteCard(ctx, "ADL-1"); !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("card concluído não conclui de novo: %v", err)
-	}
-	if err := s.FailCard(ctx, "ADL-2", run.FailureCIFailedAfterRetries, "CI vermelho"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.FailCard(ctx, "ADL-2", run.FailureTimeout, "x"); err == nil {
-		t.Fatal("código de run não serve para card")
-	}
-	cards, _ := s.ListCards(ctx)
-	if cards[0].Status != CardDone || cards[0].Phase != nil {
-		t.Fatalf("card concluído: %+v", cards[0])
-	}
-	if cards[1].Status != CardFailed || *cards[1].FailureCode != "ci_failed_after_retries" || *cards[1].FailureDetail != "CI vermelho" {
-		t.Fatalf("card que falhou no ciclo: %+v", cards[1])
-	}
-}
-
-func TestRetryAfterCIGaveUpRepeatsTheFixOnTheSamePR(t *testing.T) {
-	s := testStore(t)
-	ctx := context.Background()
-	openPR(t, s, "ADL-1")
-	if _, err := s.EnqueueRework(ctx, "ADL-1", run.KindFixCI, "log 1", nil); err != nil {
-		t.Fatal(err)
-	}
+	_ = s.SetReviewState(ctx, "ADL-1", PhaseCIFailed, &Pending{Kind: run.KindFixCI, Feedback: "log"})
+	_, _ = s.RequestRework(ctx, "ADL-1", "")
 	cl, _ := s.ClaimRun(ctx)
-	_ = s.FinishRun(ctx, cl.RunID, okRun(), "")
-	if err := s.FailCard(ctx, "ADL-1", run.FailureCIFailedAfterRetries, "desisti"); err != nil {
+	res := run.Result{CardID: "ADL-1"}
+	res.Failed(run.Fail(run.FailurePublishError, "push recusado"))
+	if err := s.FinishRun(ctx, cl.RunID, res, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.MarkReady(ctx, "ADL-1"); err != nil {
-		t.Fatal(err)
+	d := status(t, s, "ADL-1")
+	if d.Status != CardInReview || !d.HasPending || *d.FailureCode != "publish_error" {
+		t.Fatalf("correção que falhou: o card fica em revisão com a correção ainda pronta: %+v", d.CardView)
+	}
+	if _, err := s.RequestRework(ctx, "ADL-1", ""); err != nil {
+		t.Fatalf("dá para pedir de novo: %v", err)
 	}
 	cl, _ = s.ClaimRun(ctx)
-	if cl.Task.Kind != run.KindFixCI || cl.Task.Attempt != 1 || cl.Task.Feedback != "log 1" || cl.Task.PRNumber != 3 {
-		t.Fatalf("tentar de novo deveria repetir a correção no PR: %+v", cl.Task)
-	}
-}
-
-func TestRetryAfterPRClosedImplementsAgain(t *testing.T) {
-	s := testStore(t)
-	ctx := context.Background()
-	openPR(t, s, "ADL-1")
-	if err := s.FailCard(ctx, "ADL-1", run.FailurePRClosed, "fechado"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.MarkReady(ctx, "ADL-1"); err != nil {
-		t.Fatal(err)
-	}
-	cl, _ := s.ClaimRun(ctx)
-	if cl.Task.Kind != run.KindImplement {
-		t.Fatalf("com o PR fechado, o card é implementado de novo: %+v", cl.Task)
+	_ = s.FinishRun(ctx, cl.RunID, okRun(), "")
+	_ = s.SetReviewState(ctx, "ADL-1", PhaseCIFailed, &Pending{Kind: run.KindFixCI, Feedback: "log 3"})
+	if _, err := s.RequestRework(ctx, "ADL-1", ""); !errors.Is(err, ErrLimitReached) {
+		t.Fatalf("na terceira, o limite trava: %v", err)
 	}
 }
 
@@ -428,13 +435,66 @@ func TestReviewReworkRecordsTheHandledReview(t *testing.T) {
 	ctx := context.Background()
 	openPR(t, s, "ADL-1")
 	id := int64(991)
-	if _, err := s.EnqueueRework(ctx, "ADL-1", run.KindAddressReview, "comentários", &id); err != nil {
+	_ = s.SetReviewState(ctx, "ADL-1", PhaseChangesRequested, &Pending{Kind: run.KindAddressReview, Feedback: "comentários", ReviewID: &id})
+	if _, err := s.RequestRework(ctx, "ADL-1", ""); err != nil {
 		t.Fatal(err)
 	}
 	cl, _ := s.ClaimRun(ctx)
 	_ = s.FinishRun(ctx, cl.RunID, okRun(), "")
 	q, _ := s.ReviewQueue(ctx)
-	if len(q) != 1 || q[0].LastReviewID == nil || *q[0].LastReviewID != 991 || q[0].ReviewRounds != 1 {
+	if len(q) != 1 || q[0].LastReviewID == nil || *q[0].LastReviewID != 991 || q[0].ReviewRounds != 1 || q[0].HasPending {
 		t.Fatalf("revisão atendida: %+v", q)
+	}
+}
+
+func TestCIRerunIsOnlyForRedCI(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	openPR(t, s, "ADL-1")
+	if err := s.RequestCIRerun(ctx, "ADL-1"); !errors.Is(err, ErrNothingToFix) {
+		t.Fatalf("CI rodando não pede rerun: %v", err)
+	}
+	_ = s.SetReviewState(ctx, "ADL-1", PhaseCIFailed, &Pending{Kind: run.KindFixCI, Feedback: "log"})
+	if err := s.RequestCIRerun(ctx, "ADL-1"); err != nil {
+		t.Fatal(err)
+	}
+	if q, _ := s.ReviewQueue(ctx); len(q) != 1 || !q[0].RerunRequested {
+		t.Fatalf("pedido registrado: %+v", q)
+	}
+	if err := s.CIRerunDone(ctx, "ADL-1"); err != nil {
+		t.Fatal(err)
+	}
+	q, _ := s.ReviewQueue(ctx)
+	if q[0].RerunRequested || *q[0].Phase != PhaseCIPending || q[0].HasPending {
+		t.Fatalf("depois do rerun: %+v", q[0])
+	}
+}
+
+func TestCardCompletesOnMergeAndFailsWhenPRCloses(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	openPR(t, s, "ADL-1")
+	openPR(t, s, "ADL-2")
+	if err := s.CompleteCard(ctx, "ADL-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompleteCard(ctx, "ADL-1"); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("card concluído não conclui de novo: %v", err)
+	}
+	if err := s.FailCard(ctx, "ADL-2", run.FailureTimeout, "x"); err == nil {
+		t.Fatal("código de run não serve para card")
+	}
+	if err := s.FailCard(ctx, "ADL-2", run.FailurePRClosed, "fechado"); err != nil {
+		t.Fatal(err)
+	}
+	if d := status(t, s, "ADL-1"); d.Status != CardDone || d.Phase != nil {
+		t.Fatalf("card concluído: %+v", d.CardView)
+	}
+	if _, err := s.Move(ctx, "ADL-2", CardRunning); err != nil {
+		t.Fatalf("com o PR fechado, o card pode ser executado de novo: %v", err)
+	}
+	cl, _ := s.ClaimRun(ctx)
+	if cl.Task.Kind != run.KindImplement {
+		t.Fatalf("e é implementado do zero: %+v", cl.Task)
 	}
 }

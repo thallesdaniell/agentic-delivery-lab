@@ -1,6 +1,7 @@
 {{define "title"}}Board{{end}}
 {{define "content"}}
 <h1 class="sr-only">Board</h1>
+<p class="hint board-hint">Arraste o card para a próxima coluna: Pronto não gasta nada, e soltar em Executando dispara o run. Em revisão e Concluído mudam pelo PR.</p>
 {{template "columns" .}}
 {{end}}
 
@@ -8,25 +9,25 @@
 <section id="columns" class="board" hx-get="/partials/columns" hx-trigger="every 3s" hx-swap="outerHTML">
   {{template "error" .Error}}
   {{range .Columns}}
-  <div class="column col-{{.Status}}">
+  <div class="column col-{{.Status}}" data-status="{{.Status}}" data-title="{{.Title}}">
     <h2>{{.Title}} <span class="count">{{len .Cards}}</span></h2>
     {{range .Cards}}
-    <article class="card">
+    {{$moves := moves .}}
+    <article class="card{{if $moves}} draggable{{end}}"{{if $moves}} draggable="true"{{end}} data-card="{{.ID}}" data-moves="{{$moves}}" data-agent="{{.Agent}}" data-budget="{{budget .AgentBudgetUSD}}">
       <a class="card-title" href="/cards/{{.ID}}"><span class="card-id">{{.ID}}</span> {{.Title}}</a>
       <p class="meta">
         {{if .Agent}}<span class="tag">{{.Agent}}</span>{{else}}<span class="tag muted">sem agente</span>{{end}}
         {{if .RunID}}<a href="/runs/{{.RunID}}">run #{{.RunID}}</a>{{end}}
         {{if .CostUSD}}<span>{{money .CostUSD}}</span>{{end}}
       </p>
-      {{if and (eq .Status "in_review") .Phase}}<p><span class="phase phase-{{phaseKey .Phase}}">{{phase .Phase}}</span></p>{{end}}
-      {{if or (eq .Status "ready") (eq .Status "running")}}{{with kind .RunKind .RunAttempt}}<p><span class="phase phase-rework">{{.}}</span></p>{{end}}{{end}}
-      {{if .FailureCode}}<p class="failure"><code>{{str .FailureCode}}</code></p>{{end}}
+      {{template "card-labels" .}}
       {{if .PRURL}}<p><a href="{{str .PRURL}}" rel="noreferrer">PR {{prnum .PRURL}}</a></p>{{end}}
-      {{if and .Agent (or (eq .Status "backlog") (eq .Status "failed"))}}
-      <button class="button small" hx-post="/cards/{{.ID}}/ready" hx-vals='{"view":"board"}' hx-target="#columns" hx-swap="outerHTML">
-        {{if eq .Status "failed"}}Tentar de novo{{else}}Mover para Pronto{{end}}
-      </button>
-      {{end}}
+      <div class="actions">
+        {{if canMove . "ready"}}<button class="button small" hx-post="/cards/{{.ID}}/move" hx-vals='{"to":"ready","view":"board"}' hx-target="#columns" hx-swap="outerHTML">Pronto</button>{{end}}
+        {{if canMove . "running"}}<button class="button small primary" hx-post="/cards/{{.ID}}/move" hx-vals='{"to":"running","view":"board"}' hx-target="#columns" hx-swap="outerHTML" hx-confirm="Executar {{.ID}} com {{.Agent}}{{with budget .AgentBudgetUSD}} (teto {{.}}){{end}}?">{{if eq .Status "failed"}}Executar de novo{{else}}Executar{{end}}</button>{{end}}
+        {{if fixable .}}<button class="button small primary" hx-post="/cards/{{.ID}}/fix" hx-vals='{"view":"board"}' hx-target="#columns" hx-swap="outerHTML" hx-confirm="Mandar a correção de {{.ID}} para {{.Agent}}?">Corrigir com o agente</button>{{end}}
+        {{if and (eq .Status "in_review") .Phase (eq (phaseKey .Phase) "ci_failed") (not (reworking .))}}<button class="button small" hx-post="/cards/{{.ID}}/rerun-ci" hx-vals='{"view":"board"}' hx-target="#columns" hx-swap="outerHTML">Rodar o CI de novo</button>{{end}}
+      </div>
     </article>
     {{else}}
     <p class="empty">Nenhum card</p>

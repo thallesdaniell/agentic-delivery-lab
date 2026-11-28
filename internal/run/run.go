@@ -26,17 +26,15 @@ const (
 	FailureWorkspaceError FailureCode = "workspace_error"
 	FailurePublishError   FailureCode = "publish_error"
 	FailureInterrupted    FailureCode = "interrupted"
-	// Códigos do card no ciclo de revisão (M4): o run deu certo, mas o PR não chegou ao merge.
-	FailureCIFailedAfterRetries FailureCode = "ci_failed_after_retries"
-	FailureReviewLimitReached   FailureCode = "review_limit_reached"
-	FailurePRClosed             FailureCode = "pr_closed"
+	// Código do card no ciclo de revisão (M4): o run deu certo, mas o PR foi fechado sem merge.
+	FailurePRClosed FailureCode = "pr_closed"
 )
 
 // AllFailureCodes é a lista fechada, na ordem em que aparece na documentação.
 var AllFailureCodes = []FailureCode{
 	FailureCardInvalid, FailureWorkspaceError, FailureHandoffInvalid, FailureAgentBlocked, FailureAgentError,
 	FailureModelAPIError, FailureBudgetExceeded, FailureTimeout, FailureNoChanges, FailureForbiddenPath,
-	FailurePublishError, FailureInterrupted, FailureCIFailedAfterRetries, FailureReviewLimitReached, FailurePRClosed,
+	FailurePublishError, FailureInterrupted, FailurePRClosed,
 }
 
 // Valid diz se o código pertence à lista fechada.

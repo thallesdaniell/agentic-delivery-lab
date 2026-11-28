@@ -37,7 +37,9 @@ type Store interface {
 	GetRun(ctx context.Context, id int64) (*store.RunDetail, error)
 	CreateCard(ctx context.Context, c card.Card) error
 	AssignAgent(ctx context.Context, cardID, agent string) error
-	MarkReady(ctx context.Context, cardID string) (int64, error)
+	Move(ctx context.Context, cardID string, to store.CardStatus) (int64, error)
+	RequestRework(ctx context.Context, cardID, note string) (int64, error)
+	RequestCIRerun(ctx context.Context, cardID string) error
 	ListAgents(ctx context.Context) ([]store.AgentView, error)
 	ListSkills(ctx context.Context) ([]store.SkillView, error)
 }
@@ -100,7 +102,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /cards/{id}", s.cardPage)
 	mux.HandleFunc("GET /cards/{id}/panel", s.cardPanel)
 	mux.HandleFunc("POST /cards/{id}/agent", s.assignAgent)
-	mux.HandleFunc("POST /cards/{id}/ready", s.markReady)
+	mux.HandleFunc("POST /cards/{id}/move", s.move)
+	mux.HandleFunc("POST /cards/{id}/fix", s.fix)
+	mux.HandleFunc("POST /cards/{id}/rerun-ci", s.rerunCI)
 	mux.HandleFunc("GET /runs/{id}", s.runPage)
 	mux.HandleFunc("GET /runs/{id}/panel", s.runPanel)
 	mux.HandleFunc("GET /catalog", s.catalogPage)
@@ -108,7 +112,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 // secure aplica os headers de segurança e só aceita escrita vinda do próprio board.
-// Mover um card para Pronto gasta dinheiro: um site de fora não pode fazer isso por um formulário.
+// Pôr um card em Executando ou pedir uma correção gasta dinheiro: um site de fora não pode fazer isso por um formulário.
 func secure(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -282,9 +286,13 @@ type cardData struct {
 	Error  string
 }
 
-// Movable diz se o card pode trocar de agente ou ir para Pronto.
+// Movable diz se o card ainda pode trocar de agente (antes de entrar em Executando).
 func (d cardData) Movable() bool {
-	return d.Card.Status == store.CardBacklog || d.Card.Status == store.CardFailed
+	switch d.Card.Status {
+	case store.CardBacklog, store.CardReady, store.CardFailed:
+		return true
+	}
+	return false
 }
 
 // Active diz se o card ainda pode mudar sozinho: run na fila ou rodando, ou PR em revisão (o painel se atualiza).
@@ -294,12 +302,6 @@ func (d cardData) Active() bool {
 		return true
 	}
 	return false
-}
-
-// RetryRework diz se "Tentar de novo" repete a correção no PR que já existe, em vez de reimplementar o card.
-func (d cardData) RetryRework() bool {
-	return d.Card.Status == store.CardFailed && d.Card.PRURL != nil &&
-		(d.Card.FailureCode == nil || *d.Card.FailureCode != string(run.FailurePRClosed))
 }
 
 func (s *Server) loadCard(ctx context.Context, id string) (cardData, error) {
@@ -344,10 +346,30 @@ func (s *Server) assignAgent(w http.ResponseWriter, r *http.Request) {
 	s.renderCardPanel(w, r, status, msg)
 }
 
-// markReady move o card para Pronto: grava o run na fila. Responde com o painel do card
-// ou com as colunas do board, conforme de onde veio o clique.
-func (s *Server) markReady(w http.ResponseWriter, r *http.Request) {
-	_, err := s.store.MarkReady(r.Context(), r.PathValue("id"))
+// move faz o movimento pedido no board (arrastar ou botão). A regra é store.AllowedMoves, a mesma da API
+// e da linha de comando; entrar em Executando enfileira o run.
+func (s *Server) move(w http.ResponseWriter, r *http.Request) {
+	_, err := s.store.Move(r.Context(), r.PathValue("id"), store.CardStatus(r.FormValue("to")))
+	s.respond(w, r, err)
+}
+
+// fix manda ao agente a correção pendente do PR, com a orientação opcional de quem pediu.
+func (s *Server) fix(w http.ResponseWriter, r *http.Request) {
+	note := r.FormValue("note")
+	if len(note) > 2000 {
+		note = note[:2000]
+	}
+	_, err := s.store.RequestRework(r.Context(), r.PathValue("id"), note)
+	s.respond(w, r, err)
+}
+
+// rerunCI registra o pedido de rodar o CI de novo; o orquestrador o executa.
+func (s *Server) rerunCI(w http.ResponseWriter, r *http.Request) {
+	s.respond(w, r, s.store.RequestCIRerun(r.Context(), r.PathValue("id")))
+}
+
+// respond devolve o painel do card ou as colunas do board, conforme de onde veio a ação.
+func (s *Server) respond(w http.ResponseWriter, r *http.Request, err error) {
 	status, msg, ok := actionResult(err)
 	if !ok {
 		s.fail(w, err)
@@ -366,13 +388,17 @@ func actionResult(err error) (status int, msg string, ok bool) {
 	case err == nil:
 		return http.StatusOK, "", true
 	case errors.Is(err, store.ErrNoAgent):
-		return http.StatusUnprocessableEntity, "Atribua um agente antes de mover o card para Pronto.", true
+		return http.StatusUnprocessableEntity, "Atribua um agente antes: o card só vai para Pronto ou Executando com agente.", true
 	case errors.Is(err, store.ErrUnknownAgent):
 		return http.StatusUnprocessableEntity, "Esse agente não existe ou saiu do catálogo.", true
 	case errors.Is(err, store.ErrActiveRun):
 		return http.StatusConflict, "O card já tem um run na fila ou rodando.", true
 	case errors.Is(err, store.ErrInvalidTransition):
-		return http.StatusConflict, "O card está em revisão ou concluído: daqui em diante, quem move o card é o PR.", true
+		return http.StatusConflict, "Esse movimento não está na regra do board: o card só anda para frente, e Em revisão e Concluído mudam pelo PR.", true
+	case errors.Is(err, store.ErrNothingToFix):
+		return http.StatusConflict, "Não há CI vermelho nem pedido de mudanças para mandar ao agente agora.", true
+	case errors.Is(err, store.ErrLimitReached):
+		return http.StatusConflict, "O card já usou todas as correções desse tipo. Daqui em diante, é com uma pessoa no PR.", true
 	default:
 		return 0, "", false
 	}
@@ -529,7 +555,45 @@ var funcs = template.FuncMap{
 		}
 		return string(*p)
 	},
-	"kind":      kindLabel,
+	"kind": kindLabel,
+	"moves": func(v store.CardView) string {
+		var out []string
+		for _, m := range store.AllowedMoves(v.Status, v.Agent != "") {
+			out = append(out, string(m))
+		}
+		return strings.Join(out, " ")
+	},
+	"canMove": func(v store.CardView, to string) bool {
+		return store.CanMove(v.Status, v.Agent != "", store.CardStatus(to))
+	},
+	"reworking": func(v store.CardView) bool {
+		return v.Status == store.CardInReview && v.RunStatus != nil && (*v.RunStatus == "queued" || *v.RunStatus == "running")
+	},
+	"fixable": func(v store.CardView) bool {
+		if v.Status != store.CardInReview || !v.HasPending || v.Phase == nil {
+			return false
+		}
+		switch *v.Phase {
+		case store.PhaseCIFailed:
+			return v.CIAttempts < run.MaxCIAttempts
+		case store.PhaseChangesRequested:
+			return v.ReviewRounds < run.MaxReviewRounds
+		}
+		return false
+	},
+	"limitHit": func(v store.CardView) bool {
+		if v.Status != store.CardInReview || v.Phase == nil {
+			return false
+		}
+		return (*v.Phase == store.PhaseCIFailed && v.CIAttempts >= run.MaxCIAttempts) ||
+			(*v.Phase == store.PhaseChangesRequested && v.ReviewRounds >= run.MaxReviewRounds)
+	},
+	"budget": func(p *float64) string {
+		if p == nil {
+			return ""
+		}
+		return fmt.Sprintf("US$ %.2f", *p)
+	},
 	"maxCI":     func() int { return run.MaxCIAttempts },
 	"maxReview": func() int { return run.MaxReviewRounds },
 	"int":       func(p *int) string { return deref(p) },

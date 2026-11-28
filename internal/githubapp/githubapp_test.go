@@ -188,3 +188,25 @@ func TestTokenSourceReusesAndRenewsTheToken(t *testing.T) {
 		t.Fatalf("ao desligar, revoga: %d", revoked)
 	}
 }
+
+func TestRerunFailedJobsOncePerWorkflowRun(t *testing.T) {
+	var posts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && (r.URL.Path == "/repos/o/r/actions/jobs/1" || r.URL.Path == "/repos/o/r/actions/jobs/2"):
+			_, _ = w.Write([]byte(`{"run_id":900}`))
+		case r.Method == http.MethodPost:
+			posts = append(posts, r.URL.Path)
+			w.WriteHeader(201)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	if err := (Client{BaseURL: srv.URL}).RerunFailedJobs(context.Background(), "tok", "o/r", []int64{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 || posts[0] != "/repos/o/r/actions/runs/900/rerun-failed-jobs" {
+		t.Fatalf("um pedido por workflow run: %v", posts)
+	}
+}

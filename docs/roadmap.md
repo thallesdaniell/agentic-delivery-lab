@@ -4,6 +4,8 @@ Do zero até um card que vira PR, passa pelo CI e é concluído com o merge, pri
 
 ## Decisões
 
+Cada decisão tem uma ADR em [`docs/adr/`](adr/README.md), com o contexto e as consequências. A tabela é o resumo.
+
 | Tema | Decisão | Por quê |
 |---|---|---|
 | Orquestrador | **Go**: API, fila, estado dos runs e board num binário só, com subcomandos | O mesmo padrão do `sre-agent`: Postgres, migrations, `Store` com versão em memória para testes, OpenTelemetry |
@@ -14,7 +16,7 @@ Do zero até um card que vira PR, passa pelo CI e é concluído com o merge, pri
 | Execução | **Docker local** primeiro, **Kubernetes Job** (`kind`) depois | Tudo sobe com `docker compose up`; o cluster entra quando o fluxo estiver provado |
 | Credencial | **GitHub App** instalado só no repo-alvo, token de instalação por run (expira em 1 h) | Nada de chave estática; o container do agente leva só a chave do Claude, e a do App fica num container separado que roda depois |
 | Repo-alvo | **Repositório separado em Python**, pequeno e com testes | O agente nunca mexe no próprio lab, e o alvo mostra que ele não depende da stack do lab |
-| CI vermelho | **Até 2 tentativas de correção**; na seguinte, o run termina como `Falhou` | Evita loop caro com um agente que não converge |
+| Ciclo de revisão | **Fluxo puxado**: o card só anda para frente, as etiquetas informam e uma pessoa decide pelos botões; até 2 correções de CI e 3 rodadas de revisão por card ([ADR 0011](adr/0011-fluxo-puxado-o-card-so-anda-para-frente.md)) | O agente nunca age sozinho num PR em que uma pessoa mexeu, e falha de infraestrutura não gasta agente |
 | Custo | **Limite em dólares por run** desde o M1 | Um run fora de controle não pode virar uma conta surpresa |
 
 ## Códigos de falha
@@ -35,8 +37,6 @@ Todo run que termina como `Falhou` carrega um destes códigos, e o card que falh
 | `forbidden_path` | O agente alterou um caminho proibido, como `.github/` |
 | `publish_error` | O push ou a abertura do PR falharam |
 | `interrupted` | O orquestrador reiniciou com o run em andamento |
-| `ci_failed_after_retries` | O CI continuou vermelho depois das 2 tentativas de correção (card, M4) |
-| `review_limit_reached` | A revisão pediu mudanças de novo depois de 3 rodadas com o agente (card, M4) |
 | `pr_closed` | O PR foi fechado sem merge (card, M4) |
 
 ## Marcos
@@ -82,14 +82,14 @@ O M1 vem antes do orquestrador de propósito: ele responde se o agente entrega u
 
 **Pronto quando:** o fluxo do M2 sai inteiro da UI.
 
-### M4: ciclo fechado
+### M4: ciclo fechado (em andamento)
 
-- O board tem 6 colunas: Backlog, Pronto, Executando, **Em revisão**, **Concluído** e Falhou. "Em revisão" junta as fases do PR numa etiqueta: CI rodando, CI vermelho, aguardando revisão, mudanças pedidas e aprovado.
-- Um observador no orquestrador consulta o GitHub a cada 30 segundos (`REVIEW_POLL_INTERVAL`) para cada card em revisão: o estado do PR, os checks do último commit e as revisões. Ele usa um token de instalação do App, renovado antes de expirar e revogado ao desligar. A decisão é uma função pura ([`internal/review/decide.go`](../internal/review/decide.go)), testada caso a caso.
-- CI vermelho devolve o card ao agente com o fim do log de cada check que falhou, até 2 vezes; na terceira, o card vai para Falhou com `ci_failed_after_retries`. Sem a permissão Actions: read, o agente recebe só o nome dos checks e roda os checks do repositório para achar a falha.
-- Só "Request changes" devolve o card ao agente, com o comentário geral e os comentários de linha; comentário solto não dispara nada. Cada revisão dispara uma vez só, e depois de 3 rodadas o card falha com `review_limit_reached`. A correção não conta nas tentativas do CI.
-- O run de correção é um run novo, de outro tipo (`fix_ci` ou `address_review`), com o mesmo agente congelado do run anterior. O worker clona o branch do PR, e o log ou os comentários entram no prompt entre `<feedback>` e `</feedback>`, tratados como dado, como o card. O publisher faz o commit no mesmo branch, push sem force e comenta no PR o que o agente fez. Push com force só existe para reimplementar um card cujo PR foi fechado.
-- Merge feito por uma pessoa conclui o card; PR fechado sem merge leva o card para Falhou com `pr_closed`. "Tentar de novo" num card que falhou com o PR aberto repete a última correção no mesmo PR, com uma rodada nova; sem PR, ou com o PR fechado, o card é implementado de novo.
+- O board tem 6 colunas, e o card só anda para frente: Backlog → Pronto → Executando → **Em revisão** → **Concluído**, com Falhou como fim de linha ([ADR 0011](adr/0011-fluxo-puxado-o-card-so-anda-para-frente.md)). Pronto é "refinado, esperando alguém puxar" e não gasta nada; entrar em Executando enfileira o run.
+- Arrastar e soltar segue a mesma regra dos botões e da linha de comando (`store.AllowedMoves`, aplicada pelo banco em `Move`). O board marca em cada card as colunas que o aceitam, pede confirmação antes de soltar em Executando e o servidor recusa o que estiver fora da regra.
+- Um observador no orquestrador consulta o GitHub a cada 30 segundos para cada card em revisão sem run ativo ([ADR 0010](adr/0010-ciclo-de-revisao-por-polling.md)). Ele atualiza a etiqueta (CI rodando, CI vermelho, mudanças pedidas, aguardando revisão, aprovado) e deixa pronta a correção: o fim do log de cada check vermelho, ou o comentário geral e os de linha de um "Request changes". Comentário solto não conta, e cada revisão fica pendente uma vez só.
+- Uma pessoa decide pelos botões do card: **Corrigir com o agente**, com uma orientação opcional, ou **Rodar o CI de novo**, que refaz os jobs vermelhos (Actions: write no App) sem gastar agente. O board só grava o pedido; o orquestrador executa.
+- O run de correção (`fix_ci` ou `address_review`) usa o agente congelado do run anterior, clona o branch do PR e recebe o feedback e a orientação delimitados como dado. O publisher faz o commit no mesmo branch, push sem force e comenta no PR o que o agente fez. O card fica em Em revisão com a etiqueta "corrigindo"; se a correção falhar, o código aparece na etiqueta e o card não sai da coluna. No limite (2 correções de CI, 3 rodadas de revisão), o botão some.
+- Merge feito por uma pessoa conclui o card; PR fechado sem merge leva o card para Falhou com `pr_closed`, e dali ele pode ser executado de novo do zero.
 
 **Pronto quando:** o [ciclo do card](diagramas/ciclo-do-card.svg) funciona de ponta a ponta, inclusive os dois retornos.
 

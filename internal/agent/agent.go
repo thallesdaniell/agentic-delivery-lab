@@ -132,6 +132,12 @@ func Prompt(c card.Card, task run.Task) string {
 		// O feedback não pode fechar a própria tag e escapar da delimitação.
 		fb := strings.ReplaceAll(task.Feedback, "</feedback>", "</ feedback>")
 		fmt.Fprintf(&b, "\n<feedback>\n%s\n</feedback>\n", fb)
+		if note := strings.TrimSpace(task.Note); note != "" {
+			// Orientação de quem pediu a correção no board: ajuda a decidir, sem passar por cima das regras.
+			note = strings.ReplaceAll(note, "</orientacao>", "</ orientacao>")
+			fmt.Fprintf(&b, "\nQuem pediu esta correção no board deixou uma orientação (bloco orientacao abaixo). Siga-a quando ela "+
+				"não contrariar as regras nem o card.\n<orientacao>\n%s\n</orientacao>\n", note)
+		}
 	}
 	return b.String()
 }

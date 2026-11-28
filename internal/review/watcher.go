@@ -12,23 +12,23 @@ import (
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/store"
 )
 
-// GitHub é o que o observador lê do PR (e o comentário que ele deixa ao desistir).
+// GitHub é o que o observador lê do PR, mais o pedido de rodar o CI de novo.
 type GitHub interface {
 	GetPullRequest(ctx context.Context, token, repo string, number int) (githubapp.PRState, error)
 	CheckRuns(ctx context.Context, token, repo, sha string) ([]githubapp.CheckRun, error)
 	JobLog(ctx context.Context, token, repo string, jobID int64) (string, error)
 	Reviews(ctx context.Context, token, repo string, number int) ([]githubapp.Review, error)
 	ReviewComments(ctx context.Context, token, repo string, number int, reviewID int64) ([]githubapp.ReviewComment, error)
-	CreateIssueComment(ctx context.Context, token, repo string, number int, body string) error
+	RerunFailedJobs(ctx context.Context, token, repo string, jobIDs []int64) error
 }
 
 // Store é o que o observador muda no banco. Toda alteração só vale se o card ainda está em revisão.
 type Store interface {
 	ReviewQueue(ctx context.Context) ([]store.Reviewing, error)
-	SetReviewPhase(ctx context.Context, cardID string, phase store.ReviewPhase) error
+	SetReviewState(ctx context.Context, cardID string, phase store.ReviewPhase, p *store.Pending) error
 	CompleteCard(ctx context.Context, cardID string) error
 	FailCard(ctx context.Context, cardID string, code run.FailureCode, detail string) error
-	EnqueueRework(ctx context.Context, cardID string, kind run.Kind, feedback string, reviewID *int64) (int64, error)
+	CIRerunDone(ctx context.Context, cardID string) error
 }
 
 // Watcher acompanha os PRs dos cards em revisão.
@@ -71,62 +71,72 @@ func (w *Watcher) check(ctx context.Context, token string, c store.Reviewing) er
 			return err
 		}
 	}
-	d := Decide(snap)
 	log := w.Log.With("card", c.CardID, "pr", c.PRNumber)
+	if c.RerunRequested && snap.PR.State == "open" {
+		return w.rerun(ctx, token, c, snap, log)
+	}
+	d := Decide(snap)
 	switch d.Action {
-	case ActPhase:
-		if c.Phase != nil && *c.Phase == d.Phase {
-			return nil
-		}
-		log.Info("fase do PR", "phase", d.Phase)
-		return ignoreMoved(w.Store.SetReviewPhase(ctx, c.CardID, d.Phase))
 	case ActComplete:
 		log.Info("PR mergeado: card concluído")
 		return ignoreMoved(w.Store.CompleteCard(ctx, c.CardID))
 	case ActFail:
-		log.Warn("ciclo de revisão encerrado", "failure_code", d.Code, "detail", d.Detail)
-		if err := ignoreMoved(w.Store.FailCard(ctx, c.CardID, d.Code, d.Detail)); err != nil {
+		log.Warn("PR fechado sem merge", "failure_code", d.Code)
+		return ignoreMoved(w.Store.FailCard(ctx, c.CardID, d.Code, d.Detail))
+	case ActPhase:
+		pending, changed, err := w.pending(ctx, token, c, snap, d)
+		if err != nil || !changed {
 			return err
 		}
-		if d.Code != run.FailurePRClosed {
-			w.comment(ctx, token, c, "O agente parou aqui: "+d.Detail+". O card foi para **Falhou** no board; daqui em diante é com uma pessoa.")
+		log.Info("fase do PR", "phase", d.Phase, "correction_ready", pending != nil)
+		return ignoreMoved(w.Store.SetReviewState(ctx, c.CardID, d.Phase, pending))
+	}
+	return fmt.Errorf("decisão desconhecida %q", d.Action)
+}
+
+// pending monta a correção pronta para o botão. Só busca log ou comentários quando algo mudou,
+// para não baixar o mesmo log a cada volta.
+func (w *Watcher) pending(ctx context.Context, token string, c store.Reviewing, snap Snapshot, d Decision) (*store.Pending, bool, error) {
+	same := c.Phase != nil && *c.Phase == d.Phase
+	switch d.Phase {
+	case store.PhaseCIFailed:
+		if same && c.HasPending {
+			return nil, false, nil
 		}
-		return nil
-	case ActFixCI:
 		var logs []CheckLog
 		for _, chk := range d.Failed {
 			l, err := w.GitHub.JobLog(ctx, token, c.Repo, chk.ID)
 			logs = append(logs, CheckLog{Check: chk, Log: l, Err: err})
 		}
-		feedback := CIFeedback(c.PRNumber, snap.PR.Head.SHA, logs)
-		runID, err := w.Store.EnqueueRework(ctx, c.CardID, run.KindFixCI, feedback, nil)
-		if err != nil {
-			return ignoreMoved(err)
+		return &store.Pending{Kind: run.KindFixCI, Feedback: CIFeedback(c.PRNumber, snap.PR.Head.SHA, logs)}, true, nil
+	case store.PhaseChangesRequested:
+		if same && c.PendingReviewID != nil && *c.PendingReviewID == d.Review.ID {
+			return nil, false, nil
 		}
-		log.Info("CI vermelho: card devolvido ao agente", "run", runID, "attempt", c.CIAttempts+1, "checks", names(d.Failed))
-		return nil
-	case ActAddressReview:
 		comments, err := w.GitHub.ReviewComments(ctx, token, c.Repo, c.PRNumber, d.Review.ID)
 		if err != nil {
-			return err
+			return nil, false, err
 		}
-		feedback := ReviewFeedback(c.PRNumber, *d.Review, comments)
 		id := d.Review.ID
-		runID, err := w.Store.EnqueueRework(ctx, c.CardID, run.KindAddressReview, feedback, &id)
-		if err != nil {
-			return ignoreMoved(err)
-		}
-		log.Info("revisão pediu mudanças: card devolvido ao agente", "run", runID, "round", c.ReviewRounds+1, "review", id)
-		return nil
+		return &store.Pending{Kind: run.KindAddressReview, Feedback: ReviewFeedback(c.PRNumber, *d.Review, comments), ReviewID: &id}, true, nil
 	}
-	return fmt.Errorf("decisão desconhecida %q", d.Action)
+	return nil, !same || c.HasPending, nil
 }
 
-// comment avisa no PR. Falhar aqui não muda o card: o board já mostra o que aconteceu.
-func (w *Watcher) comment(ctx context.Context, token string, c store.Reviewing, body string) {
-	if err := w.GitHub.CreateIssueComment(ctx, token, c.Repo, c.PRNumber, body); err != nil {
-		w.Log.Warn("não comentou no PR", "card", c.CardID, "pr", c.PRNumber, "err", err)
+// rerun executa o "Rodar o CI de novo" pedido no board: refaz os jobs vermelhos do último commit.
+func (w *Watcher) rerun(ctx context.Context, token string, c store.Reviewing, snap Snapshot, log *slog.Logger) error {
+	_, failed := CIState(snap.Checks)
+	var ids []int64
+	for _, chk := range failed {
+		ids = append(ids, chk.ID)
 	}
+	if len(ids) > 0 {
+		if err := w.GitHub.RerunFailedJobs(ctx, token, c.Repo, ids); err != nil {
+			return fmt.Errorf("rodando o CI de novo: %w", err)
+		}
+	}
+	log.Info("CI rodando de novo a pedido do board", "checks", names(failed))
+	return ignoreMoved(w.Store.CIRerunDone(ctx, c.CardID))
 }
 
 // ignoreMoved: o card saiu de revisão entre a leitura e a escrita (outro processo o moveu). Nada a fazer.

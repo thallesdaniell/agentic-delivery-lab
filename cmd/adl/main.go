@@ -4,7 +4,10 @@
 //	adl catalog sync                copia agents/ e skills/ do repositório para o banco
 //	adl card create <card.json>     grava um card no backlog
 //	adl card assign <id> <agente>   atribui um agente do catálogo ao card
-//	adl card ready <id>             move o card para Pronto e enfileira um run
+//	adl card ready <id>             move o card para Pronto (refinado, sem gastar nada)
+//	adl card start <id>             põe o card em Executando e enfileira o run
+//	adl card fix <id> [orientação]  manda ao agente a correção pendente do PR (CI ou revisão)
+//	adl card rerun-ci <id>          pede para rodar de novo os jobs vermelhos do CI
 //	adl card list                   lista os cards com o último run
 //	adl board                       sobe o board web (só fala com o Postgres)
 //	adl orchestrator                tira runs da fila, roda o worker, publica e acompanha os PRs
@@ -260,11 +263,27 @@ func cmdCard(ctx context.Context, args []string) error {
 		}
 		fmt.Printf("card %s com o agente %s\n", args[1], args[2])
 	case args[0] == "ready" && len(args) == 2:
-		runID, err := s.MarkReady(ctx, args[1])
+		if err := s.MarkReady(ctx, args[1]); err != nil {
+			return err
+		}
+		fmt.Printf("card %s em Pronto (refinado, esperando alguém puxar)\n", args[1])
+	case args[0] == "start" && len(args) == 2:
+		runID, err := s.Start(ctx, args[1])
 		if err != nil {
 			return err
 		}
-		fmt.Printf("card %s em Pronto; run %d na fila\n", args[1], runID)
+		fmt.Printf("card %s em Executando; run %d na fila\n", args[1], runID)
+	case args[0] == "fix" && len(args) >= 2:
+		runID, err := s.RequestRework(ctx, args[1], strings.Join(args[2:], " "))
+		if err != nil {
+			return err
+		}
+		fmt.Printf("card %s: correção mandada ao agente no run %d\n", args[1], runID)
+	case args[0] == "rerun-ci" && len(args) == 2:
+		if err := s.RequestCIRerun(ctx, args[1]); err != nil {
+			return err
+		}
+		fmt.Printf("card %s: CI vai rodar de novo na próxima volta do observador\n", args[1])
 	case args[0] == "list":
 		cards, err := s.ListCards(ctx)
 		if err != nil {
@@ -360,7 +379,7 @@ func usage() {
 uso:
   adl migrate
   adl catalog sync
-  adl card create <card.json> | assign <id> <agente> | ready <id> | list
+  adl card create <card.json> | assign <id> <agente> | ready <id> | start <id> | fix <id> [orientação] | rerun-ci <id> | list
   adl board
   adl orchestrator
   adl worker | adl publish`))

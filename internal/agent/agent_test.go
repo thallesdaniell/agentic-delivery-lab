@@ -130,3 +130,11 @@ func TestImplementPromptHasNoFeedback(t *testing.T) {
 		t.Fatal("implementar não leva feedback")
 	}
 }
+
+func TestReworkPromptCarriesTheBoardNote(t *testing.T) {
+	c := card.Card{ID: "ADL-1", Title: "t", Objective: "o", AcceptanceCriteria: []string{"a"}}
+	p := Prompt(c, run.Task{Kind: run.KindFixCI, PRNumber: 4, Attempt: 1, Feedback: "log", Note: "o teste está certo, corrija o código"})
+	if !strings.Contains(p, "<orientacao>\no teste está certo, corrija o código\n</orientacao>") {
+		t.Fatalf("a orientação do board precisa ir delimitada:\n%s", p)
+	}
+}
