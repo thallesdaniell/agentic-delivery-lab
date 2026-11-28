@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="agentic-delivery-lab bot: um branch do git que sai da linha principal, passa por um agente e volta com o merge">
+  <rect width="512" height="512" fill="#2b59c3"/>
+  <g fill="none" stroke="#ffffff" stroke-width="22" stroke-linecap="round">
+    <!-- linha principal -->
+    <path d="M180 112 V400"/>
+    <!-- branch do agente: sai da main, passa pelo agente e volta com o merge -->
+    <path d="M180 176 C180 236 260 230 286 256"/>
+    <path d="M286 256 C260 282 180 276 180 336"/>
+  </g>
+  <!-- commits na main -->
+  <circle cx="180" cy="128" r="26" fill="#2b59c3" stroke="#ffffff" stroke-width="20"/>
+  <circle cx="180" cy="384" r="26" fill="#ffffff"/>
+  <!-- o agente é um commit com rosto -->
+  <rect x="270" y="196" width="128" height="120" rx="34" fill="#ffffff"/>
+  <circle cx="312" cy="252" r="12" fill="#2b59c3"/>
+  <circle cx="356" cy="252" r="12" fill="#2b59c3"/>
+  <path d="M334 196 V170" stroke="#ffffff" stroke-width="14" stroke-linecap="round"/>
+  <circle cx="334" cy="160" r="12" fill="#ffffff"/>
+</svg>
