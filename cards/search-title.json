@@ -1,0 +1,15 @@
+{
+  "id": "ADL-7",
+  "title": "Buscar tarefas pelo título em GET /tasks",
+  "objective": "Com muitas tarefas, quem usa a API quer achar uma pelo nome sem percorrer a lista inteira.",
+  "acceptance_criteria": [
+    "GET /tasks aceita o parâmetro opcional q e devolve só as tarefas cujo título contém o texto, sem diferenciar maiúsculas de minúsculas",
+    "q funciona junto com o filtro done",
+    "Sem q, a listagem continua igual",
+    "Testes cobrindo busca com resultado, busca sem resultado e q combinado com done",
+    "A tabela de rotas do README documenta o parâmetro novo",
+    "uv run ruff check ., uv run ruff format --check . e uv run pytest passam"
+  ],
+  "repo": "thallesdaniell/agentic-delivery-target",
+  "agent": "python-dev"
+}
