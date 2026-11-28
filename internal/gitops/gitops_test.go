@@ -51,6 +51,51 @@ func TestPatchRoundTrip(t *testing.T) {
 	}
 }
 
+// Correção avança o branch do PR sem force; um push com o branch desatualizado é recusado,
+// e só o ForcePush (card reimplementado depois de o PR fechar) substitui o branch.
+func TestPushNeverRewritesThePRBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git não instalado")
+	}
+	ctx := context.Background()
+	origin := t.TempDir()
+	mustGit(t, origin, "init", "-q", "--bare", "-b", "main")
+	seed := t.TempDir()
+	mustGit(t, "/", "clone", "-q", origin, seed)
+	write(t, seed, "app.py", "a\n")
+	mustGit(t, seed, "add", ".")
+	mustGit(t, seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+	mustGit(t, seed, "push", "-q", "origin", "HEAD:refs/heads/main", "HEAD:refs/heads/agent/x")
+
+	fix := t.TempDir()
+	mustGit(t, "/", "clone", "-q", "--branch", "agent/x", origin, fix)
+	stale := t.TempDir()
+	mustGit(t, "/", "clone", "-q", "--branch", "agent/x", origin, stale)
+
+	write(t, fix, "app.py", "b\n")
+	g := Git{Dir: fix}
+	mustGit(t, fix, "add", ".")
+	if err := g.CommitHere(ctx, "bot", "bot@example.com", "fix"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Push(ctx, "agent/x", "tok"); err != nil {
+		t.Fatalf("push da correção: %v", err)
+	}
+
+	write(t, stale, "app.py", "c\n")
+	s := Git{Dir: stale}
+	mustGit(t, stale, "add", ".")
+	if err := s.CommitHere(ctx, "bot", "bot@example.com", "outra"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Push(ctx, "agent/x", "tok"); err == nil {
+		t.Fatal("push sem force com o branch desatualizado deveria ser recusado")
+	}
+	if err := s.ForcePush(ctx, "agent/x", "tok"); err != nil {
+		t.Fatalf("force push: %v", err)
+	}
+}
+
 func mustGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)

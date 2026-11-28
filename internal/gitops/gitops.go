@@ -49,6 +49,16 @@ func Clone(ctx context.Context, repo, dir string) (Git, error) {
 	return Git{Dir: dir}, nil
 }
 
+// CloneBranch faz um clone raso de um branch de um repositório público: o run de correção
+// trabalha em cima do que já está no PR.
+func CloneBranch(ctx context.Context, repo, branch, dir string) (Git, error) {
+	g := Git{Dir: "/"}
+	if _, err := g.run(ctx, nil, "clone", "--depth", "1", "--branch", branch, "https://github.com/"+repo+".git", dir); err != nil {
+		return Git{}, err
+	}
+	return Git{Dir: dir}, nil
+}
+
 // StagedPatch adiciona tudo e devolve o patch binário e os arquivos alterados.
 func (g Git) StagedPatch(ctx context.Context) ([]byte, []string, error) {
 	if _, err := g.run(ctx, nil, "add", "-A"); err != nil {
@@ -82,19 +92,35 @@ func (g Git) Commit(ctx context.Context, branch, name, email, message string) er
 	if _, err := g.run(ctx, nil, "checkout", "-b", branch); err != nil {
 		return err
 	}
+	return g.CommitHere(ctx, name, email, message)
+}
+
+// CommitHere faz o commit no branch atual (o do PR, num run de correção).
+func (g Git) CommitHere(ctx context.Context, name, email, message string) error {
 	_, err := g.run(ctx, nil, "-c", "user.name="+name, "-c", "user.email="+email, "commit", "-m", message)
 	return err
 }
 
-// Push envia a branch usando o token só no ambiente deste processo git.
+// Push envia a branch sem force: num PR que já existe, só avança se ninguém mexeu nele no meio.
 func (g Git) Push(ctx context.Context, branch, token string) error {
+	return g.push(ctx, "HEAD:refs/heads/"+branch, token)
+}
+
+// ForcePush substitui a branch. Só para reimplementar um card cujo PR foi fechado sem merge:
+// a branch é do agente (agent/<card>) e o PR antigo não volta.
+func (g Git) ForcePush(ctx context.Context, branch, token string) error {
+	return g.push(ctx, "+HEAD:refs/heads/"+branch, token)
+}
+
+// push usa o token só no ambiente deste processo git.
+func (g Git) push(ctx context.Context, refspec, token string) error {
 	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
 	withToken := Git{Dir: g.Dir, extra: []string{
 		"GIT_CONFIG_COUNT=1",
 		"GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
 		"GIT_CONFIG_VALUE_0=AUTHORIZATION: basic " + basic,
 	}}
-	_, err := withToken.run(ctx, nil, "push", "origin", "HEAD:refs/heads/"+branch)
+	_, err := withToken.run(ctx, nil, "push", "origin", refspec)
 	if err != nil {
 		return fmt.Errorf("%s", strings.ReplaceAll(err.Error(), basic, "***"))
 	}

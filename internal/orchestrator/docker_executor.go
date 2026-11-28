@@ -11,6 +11,7 @@ import (
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/card"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/catalog"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/dockerapi"
+	"github.com/thallesdaniell/agentic-delivery-lab/internal/run"
 )
 
 // DockerExecutor roda o worker num container novo por run, sem bind mount:
@@ -23,7 +24,7 @@ type DockerExecutor struct {
 }
 
 // Execute implementa Executor.
-func (d DockerExecutor) Execute(ctx context.Context, runID int64, c card.Card, spec catalog.Spec, outDir string, hooks Hooks) (string, error) {
+func (d DockerExecutor) Execute(ctx context.Context, runID int64, c card.Card, spec catalog.Spec, task run.Task, outDir string, hooks Hooks) (string, error) {
 	rawCard, err := json.Marshal(c)
 	if err != nil {
 		return "", err
@@ -32,13 +33,18 @@ func (d DockerExecutor) Execute(ctx context.Context, runID int64, c card.Card, s
 	if err != nil {
 		return "", err
 	}
+	rawTask, err := json.Marshal(task)
+	if err != nil {
+		return "", err
+	}
 	id, err := d.Docker.Create(ctx, dockerapi.Spec{
 		Name:  "adl-run-" + strconv.FormatInt(runID, 10),
 		Image: d.Image,
 		Cmd:   []string{"worker"},
-		Env:   append([]string{"ADL_CARD_JSON=" + string(rawCard), "ADL_AGENT_SPEC=" + string(rawSpec)}, d.Env...),
+		Env: append([]string{"ADL_CARD_JSON=" + string(rawCard), "ADL_AGENT_SPEC=" + string(rawSpec),
+			"ADL_RUN_TASK=" + string(rawTask)}, d.Env...),
 		Labels: map[string]string{"adl.run_id": strconv.FormatInt(runID, 10), "adl.card_id": c.ID,
-			"adl.agent": spec.Agent, "adl.agent_version": spec.AgentVersion},
+			"adl.agent": spec.Agent, "adl.agent_version": spec.AgentVersion, "adl.kind": string(task.Kind)},
 		Memory: 2 << 30,
 		Pids:   512,
 	})

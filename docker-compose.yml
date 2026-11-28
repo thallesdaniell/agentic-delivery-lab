@@ -36,6 +36,7 @@ services:
       GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:?defina no .env}
       RUN_BUDGET_USD: ${RUN_BUDGET_USD:-1.00}
       RUN_TIMEOUT: ${RUN_TIMEOUT:-20m}
+      REVIEW_POLL_INTERVAL: ${REVIEW_POLL_INTERVAL:-30s}
       WORKER_IMAGE: agentic-delivery-lab:dev
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

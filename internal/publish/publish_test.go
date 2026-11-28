@@ -20,3 +20,17 @@ func TestPRBodyCarriesCardHandoffAndCost(t *testing.T) {
 		}
 	}
 }
+
+func TestReworkCommentNamesTheAttempt(t *testing.T) {
+	res := run.Result{Model: "m", NumTurns: 5, CostUSD: 0.03,
+		Handoff: &handoff.Handoff{Outcome: handoff.OutcomeDone, Summary: "corrigi o teste", TestsRun: []string{"pytest: ok"}, Limitations: []string{}}}
+	body := ReworkComment(res, run.Task{Kind: run.KindFixCI, Attempt: 1})
+	for _, want := range []string{"Corrige o CI (tentativa 1 de 2)", "corrigi o teste", "pytest: ok", "US$ 0.03"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("faltou %q no comentário:\n%s", want, body)
+		}
+	}
+	if got := ReworkCommitMessage(card.Card{ID: "ADL-4"}, res, run.Task{Kind: run.KindAddressReview, Attempt: 2}); !strings.HasPrefix(got, "[ADL-4] Atende à revisão (rodada 2 de 3)") {
+		t.Fatalf("mensagem do commit: %q", got)
+	}
+}

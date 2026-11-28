@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/card"
+	"github.com/thallesdaniell/agentic-delivery-lab/internal/run"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/store"
 )
 
@@ -56,7 +57,8 @@ var Columns = []struct {
 	{store.CardBacklog, "Backlog"},
 	{store.CardReady, "Pronto"},
 	{store.CardRunning, "Executando"},
-	{store.CardPROpen, "PR aberto"},
+	{store.CardInReview, "Em revisão"},
+	{store.CardDone, "Concluído"},
 	{store.CardFailed, "Falhou"},
 }
 
@@ -285,9 +287,19 @@ func (d cardData) Movable() bool {
 	return d.Card.Status == store.CardBacklog || d.Card.Status == store.CardFailed
 }
 
-// Active diz se o card tem run na fila ou rodando (o painel se atualiza sozinho).
+// Active diz se o card ainda pode mudar sozinho: run na fila ou rodando, ou PR em revisão (o painel se atualiza).
 func (d cardData) Active() bool {
-	return d.Card.Status == store.CardReady || d.Card.Status == store.CardRunning
+	switch d.Card.Status {
+	case store.CardReady, store.CardRunning, store.CardInReview:
+		return true
+	}
+	return false
+}
+
+// RetryRework diz se "Tentar de novo" repete a correção no PR que já existe, em vez de reimplementar o card.
+func (d cardData) RetryRework() bool {
+	return d.Card.Status == store.CardFailed && d.Card.PRURL != nil &&
+		(d.Card.FailureCode == nil || *d.Card.FailureCode != string(run.FailurePRClosed))
 }
 
 func (s *Server) loadCard(ctx context.Context, id string) (cardData, error) {
@@ -360,7 +372,7 @@ func actionResult(err error) (status int, msg string, ok bool) {
 	case errors.Is(err, store.ErrActiveRun):
 		return http.StatusConflict, "O card já tem um run na fila ou rodando.", true
 	case errors.Is(err, store.ErrInvalidTransition):
-		return http.StatusConflict, "O card já tem PR aberto; o retorno ao agente chega no M4.", true
+		return http.StatusConflict, "O card está em revisão ou concluído: daqui em diante, quem move o card é o PR.", true
 	default:
 		return 0, "", false
 	}
@@ -446,8 +458,41 @@ func (s *Server) catalogPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "catalog", "layout", http.StatusOK, catalogData{Agents: agents, Skills: skills})
 }
 
+var phaseLabels = map[store.ReviewPhase]string{
+	store.PhaseCIPending:        "CI rodando",
+	store.PhaseCIFailed:         "CI vermelho",
+	store.PhaseAwaitingReview:   "aguardando revisão",
+	store.PhaseChangesRequested: "mudanças pedidas",
+	store.PhaseApproved:         "aprovado, falta o merge",
+}
+
+// kindLabel descreve o tipo do run para o board; implementar não ganha rótulo.
+func kindLabel(k any, attempt *int) string {
+	var kind run.Kind
+	switch v := k.(type) {
+	case run.Kind:
+		kind = v
+	case *run.Kind:
+		if v == nil {
+			return ""
+		}
+		kind = *v
+	}
+	n := 0
+	if attempt != nil {
+		n = *attempt
+	}
+	switch kind {
+	case run.KindFixCI:
+		return fmt.Sprintf("correção do CI %d/%d", n, run.MaxCIAttempts)
+	case run.KindAddressReview:
+		return fmt.Sprintf("revisão %d/%d", n, run.MaxReviewRounds)
+	}
+	return ""
+}
+
 var statusLabels = map[string]string{
-	"backlog": "Backlog", "ready": "Pronto", "running": "Executando", "pr_open": "PR aberto", "failed": "Falhou",
+	"backlog": "Backlog", "ready": "Pronto", "running": "Executando", "in_review": "Em revisão", "done": "Concluído", "failed": "Falhou",
 	"queued": "Na fila", "succeeded": "Sucesso",
 }
 
@@ -471,12 +516,27 @@ var funcs = template.FuncMap{
 		}
 		return fmt.Sprintf("US$ %.2f", *p)
 	},
-	"usd":  func(v float64) string { return fmt.Sprintf("US$ %.2f", v) },
-	"int":  func(p *int) string { return deref(p) },
-	"secs": func(p *float64) string { return secs(p) },
-	"dur":  fmtDur,
-	"at":   fmtOffset,
-	"pctf": func(v float64) string { return strconv.FormatFloat(v, 'f', 2, 64) },
+	"usd": func(v float64) string { return fmt.Sprintf("US$ %.2f", v) },
+	"phase": func(p *store.ReviewPhase) string {
+		if p == nil {
+			return ""
+		}
+		return phaseLabels[*p]
+	},
+	"phaseKey": func(p *store.ReviewPhase) string {
+		if p == nil {
+			return ""
+		}
+		return string(*p)
+	},
+	"kind":      kindLabel,
+	"maxCI":     func() int { return run.MaxCIAttempts },
+	"maxReview": func() int { return run.MaxReviewRounds },
+	"int":       func(p *int) string { return deref(p) },
+	"secs":      func(p *float64) string { return secs(p) },
+	"dur":       fmtDur,
+	"at":        fmtOffset,
+	"pctf":      func(v float64) string { return strconv.FormatFloat(v, 'f', 2, 64) },
 	"when": func(t any) string {
 		switch v := t.(type) {
 		case time.Time:

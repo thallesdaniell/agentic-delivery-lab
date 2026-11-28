@@ -56,7 +56,7 @@ type fakeExecutor struct {
 	err    error
 }
 
-func (f fakeExecutor) Execute(_ context.Context, _ int64, _ card.Card, spec catalog.Spec, dir string, h Hooks) (string, error) {
+func (f fakeExecutor) Execute(_ context.Context, _ int64, _ card.Card, spec catalog.Spec, _ run.Task, dir string, h Hooks) (string, error) {
 	if spec.Agent != "python-dev" {
 		return "", errors.New("o executor deveria receber o agente congelado")
 	}
@@ -89,7 +89,7 @@ func okResult() *run.Result {
 }
 
 func TestSuccessfulRunIsPublished(t *testing.T) {
-	pub := func(_ context.Context, cardPath, outDir string) (run.Result, error) {
+	pub := func(_ context.Context, cardPath, outDir string, _ run.Task) (run.Result, error) {
 		r, err := run.ReadResult(filepath.Join(outDir, "result.json"))
 		r.PRNumber, r.PRURL = 2, "https://github.com/o/r/pull/2"
 		return r, err
@@ -105,7 +105,7 @@ func TestSuccessfulRunIsPublished(t *testing.T) {
 }
 
 func TestFailuresAlwaysCarryACode(t *testing.T) {
-	noPub := func(context.Context, string, string) (run.Result, error) {
+	noPub := func(context.Context, string, string, run.Task) (run.Result, error) {
 		t.Fatal("run com falha não pode ser publicado")
 		return run.Result{}, nil
 	}
@@ -120,7 +120,7 @@ func TestFailuresAlwaysCarryACode(t *testing.T) {
 		"timeout":                      {fakeExecutor{err: ErrTimeout}, noPub, run.FailureTimeout},
 		"erro de infraestrutura":       {fakeExecutor{err: errors.New("docker fora")}, noPub, run.FailureWorkspaceError},
 		"worker sem result.json":       {fakeExecutor{}, noPub, run.FailureAgentError},
-		"falha ao publicar": {fakeExecutor{result: okResult()}, func(context.Context, string, string) (run.Result, error) {
+		"falha ao publicar": {fakeExecutor{result: okResult()}, func(context.Context, string, string, run.Task) (run.Result, error) {
 			return run.Result{}, errors.New("GitHub fora")
 		}, run.FailurePublishError},
 	}
@@ -142,4 +142,38 @@ func TestEmptyQueueDoesNothing(t *testing.T) {
 	if worked || err != nil {
 		t.Fatalf("fila vazia: %v %v", worked, err)
 	}
+}
+
+// O run de correção passa a tarefa (tipo, PR e entrada) do banco até o executor e o publisher.
+func TestReworkTaskReachesExecutorAndPublisher(t *testing.T) {
+	task := run.Task{Kind: run.KindFixCI, Feedback: "log do CI", PRNumber: 7, PRURL: "https://github.com/o/r/pull/7", Attempt: 1}
+	var published run.Task
+	pub := func(_ context.Context, _, outDir string, got run.Task) (run.Result, error) {
+		published = got
+		r, err := run.ReadResult(filepath.Join(outDir, "result.json"))
+		r.PRNumber, r.PRURL = got.PRNumber, got.PRURL
+		return r, err
+	}
+	exec := taskExecutor{fakeExecutor: fakeExecutor{result: okResult()}, want: task, t: t}
+	o, st := newOrch(t, exec, pub)
+	st.queue[0].Task = task
+	if _, err := o.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if published != task || st.finished[1].PRNumber != 7 {
+		t.Fatalf("publisher recebeu %+v; resultado %+v", published, st.finished[1])
+	}
+}
+
+type taskExecutor struct {
+	fakeExecutor
+	want run.Task
+	t    *testing.T
+}
+
+func (e taskExecutor) Execute(ctx context.Context, id int64, c card.Card, spec catalog.Spec, task run.Task, dir string, h Hooks) (string, error) {
+	if task != e.want {
+		e.t.Fatalf("executor recebeu %+v", task)
+	}
+	return e.fakeExecutor.Execute(ctx, id, c, spec, task, dir, h)
 }

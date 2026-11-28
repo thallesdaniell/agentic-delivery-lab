@@ -34,11 +34,12 @@ type Hooks struct {
 // Executor roda o worker de um run com o agente congelado e deixa result.json e changes.patch em outDir.
 // Devolve o log do worker. Um erro de Executor é falha de infraestrutura, não do agente.
 type Executor interface {
-	Execute(ctx context.Context, runID int64, c card.Card, spec catalog.Spec, outDir string, hooks Hooks) (log string, err error)
+	Execute(ctx context.Context, runID int64, c card.Card, spec catalog.Spec, task run.Task, outDir string, hooks Hooks) (log string, err error)
 }
 
-// Publisher abre o PR de um run que terminou com sucesso (publish.Run em produção).
-type Publisher func(ctx context.Context, cardPath, outDir string) (run.Result, error)
+// Publisher abre o PR, ou empurra a correção para o PR que já existe, de um run que terminou com sucesso
+// (publish.Run em produção).
+type Publisher func(ctx context.Context, cardPath, outDir string, task run.Task) (run.Result, error)
 
 // Orchestrator junta fila, execução e publicação.
 type Orchestrator struct {
@@ -59,7 +60,7 @@ func (o *Orchestrator) Tick(ctx context.Context) (bool, error) {
 	if err != nil || cl == nil {
 		return false, err
 	}
-	log := o.Log.With("run", cl.RunID, "card", cl.Card.ID, "agent", cl.Spec.Agent)
+	log := o.Log.With("run", cl.RunID, "card", cl.Card.ID, "agent", cl.Spec.Agent, "kind", cl.Task.Kind)
 	log.Info("run iniciado")
 	res, workerLog := o.process(ctx, cl, log)
 	// O resultado é gravado mesmo se o contexto do loop foi cancelado no meio.
@@ -89,7 +90,7 @@ func (o *Orchestrator) process(ctx context.Context, cl *store.Claimed, log *slog
 
 	ectx, cancel := context.WithTimeout(ctx, o.Timeout)
 	defer cancel()
-	workerLog, err := o.Executor.Execute(ectx, cl.RunID, cl.Card, cl.Spec, dir, Hooks{
+	workerLog, err := o.Executor.Execute(ectx, cl.RunID, cl.Card, cl.Spec, cl.Task, dir, Hooks{
 		OnStart: func(id string) {
 			if err := o.Store.SetContainer(ctx, cl.RunID, id); err != nil {
 				log.Warn("não gravou o container do run", "err", err)
@@ -115,7 +116,7 @@ func (o *Orchestrator) process(ctx context.Context, cl *store.Claimed, log *slog
 	if res.Status != run.StatusSucceeded {
 		return res, workerLog
 	}
-	published, err := o.Publish(ctx, cardPath, dir)
+	published, err := o.Publish(ctx, cardPath, dir, cl.Task)
 	if err != nil {
 		res.Failed(run.Fail(run.FailurePublishError, err.Error()))
 		return res, workerLog

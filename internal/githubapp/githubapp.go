@@ -141,6 +141,111 @@ func (c Client) DefaultBranch(ctx context.Context, token, repo string) (string, 
 	return r.DefaultBranch, nil
 }
 
+// PRState é o estado de um PR que o observador do ciclo de revisão precisa.
+type PRState struct {
+	Number  int    `json:"number"`
+	State   string `json:"state"` // open ou closed
+	Merged  bool   `json:"merged"`
+	HTMLURL string `json:"html_url"`
+	Head    struct {
+		SHA string `json:"sha"`
+	} `json:"head"`
+}
+
+// GetPullRequest lê o PR.
+func (c Client) GetPullRequest(ctx context.Context, token, repo string, number int) (PRState, error) {
+	var pr PRState
+	err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/pulls/"+strconv.Itoa(number), "token "+token, nil, &pr)
+	return pr, err
+}
+
+// CheckRun é um check do commit (no GitHub Actions, um job).
+type CheckRun struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`     // queued, in_progress, completed
+	Conclusion string `json:"conclusion"` // success, failure, cancelled, timed_out, ...
+	HTMLURL    string `json:"html_url"`
+	Output     struct {
+		Title   string `json:"title"`
+		Summary string `json:"summary"`
+	} `json:"output"`
+	App struct {
+		Slug string `json:"slug"`
+	} `json:"app"`
+}
+
+// CheckRuns lista os checks de um commit.
+func (c Client) CheckRuns(ctx context.Context, token, repo, sha string) ([]CheckRun, error) {
+	var out struct {
+		CheckRuns []CheckRun `json:"check_runs"`
+	}
+	err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/commits/"+sha+"/check-runs?per_page=100", "token "+token, nil, &out)
+	return out.CheckRuns, err
+}
+
+// JobLog baixa o log de um job do GitHub Actions. Exige a permissão Actions: read no App.
+// O GitHub responde com um redirecionamento para uma URL assinada, que o cliente segue sem o token.
+func (c Client) JobLog(ctx context.Context, token, repo string, jobID int64) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base()+"/repos/"+repo+"/actions/jobs/"+strconv.FormatInt(jobID, 10)+"/logs", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "agentic-delivery-lab")
+	req.Header.Set("Authorization", "token "+token)
+	resp, err := c.http().Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("GitHub log do job %d: HTTP %d: %s", jobID, resp.StatusCode, truncate(string(raw), 200))
+	}
+	return string(raw), nil
+}
+
+// Review é uma revisão de PR.
+type Review struct {
+	ID    int64  `json:"id"`
+	State string `json:"state"` // APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED, PENDING
+	Body  string `json:"body"`
+	User  struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	CommitID string `json:"commit_id"`
+}
+
+// Reviews lista as revisões do PR, da mais antiga para a mais nova.
+func (c Client) Reviews(ctx context.Context, token, repo string, number int) ([]Review, error) {
+	var out []Review
+	err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/pulls/"+strconv.Itoa(number)+"/reviews?per_page=100", "token "+token, nil, &out)
+	return out, err
+}
+
+// ReviewComment é um comentário de linha de uma revisão.
+type ReviewComment struct {
+	Path string `json:"path"`
+	Line *int   `json:"line"`
+	Body string `json:"body"`
+}
+
+// ReviewComments lista os comentários de linha de uma revisão.
+func (c Client) ReviewComments(ctx context.Context, token, repo string, number int, reviewID int64) ([]ReviewComment, error) {
+	var out []ReviewComment
+	path := fmt.Sprintf("/repos/%s/pulls/%d/reviews/%d/comments?per_page=100", repo, number, reviewID)
+	err := c.do(ctx, http.MethodGet, path, "token "+token, nil, &out)
+	return out, err
+}
+
+// CreateIssueComment comenta no PR (a API de issues serve para PRs).
+func (c Client) CreateIssueComment(ctx context.Context, token, repo string, number int, body string) error {
+	return c.do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/issues/%d/comments", repo, number), "token "+token,
+		map[string]string{"body": body}, nil)
+}
+
 func (c Client) do(ctx context.Context, method, path, auth string, body, out any) error {
 	var rd io.Reader
 	if body != nil {

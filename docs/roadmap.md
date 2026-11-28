@@ -19,7 +19,7 @@ Do zero até um card que vira PR, passa pelo CI e é concluído com o merge, pri
 
 ## Códigos de falha
 
-Todo run que termina como `Falhou` carrega um destes códigos. A lista vive em [`internal/run/run.go`](../internal/run/run.go), cresce conforme os marcos e nunca aceita falha sem código: o `result.json` com status `failed` e código fora da lista é recusado.
+Todo run que termina como `Falhou` carrega um destes códigos, e o card que falha no ciclo de revisão também. A lista vive em [`internal/run/run.go`](../internal/run/run.go), cresce conforme os marcos e nunca aceita falha sem código: o `result.json` com status `failed` e código fora da lista é recusado, e o banco recusa os dois casos.
 
 | Código | Quando |
 |---|---|
@@ -35,7 +35,9 @@ Todo run que termina como `Falhou` carrega um destes códigos. A lista vive em [
 | `forbidden_path` | O agente alterou um caminho proibido, como `.github/` |
 | `publish_error` | O push ou a abertura do PR falharam |
 | `interrupted` | O orquestrador reiniciou com o run em andamento |
-| `ci_failed_after_retries` | O CI continuou vermelho depois das 2 tentativas de correção (M4) |
+| `ci_failed_after_retries` | O CI continuou vermelho depois das 2 tentativas de correção (card, M4) |
+| `review_limit_reached` | A revisão pediu mudanças de novo depois de 3 rodadas com o agente (card, M4) |
+| `pr_closed` | O PR foi fechado sem merge (card, M4) |
 
 ## Marcos
 
@@ -82,10 +84,12 @@ O M1 vem antes do orquestrador de propósito: ele responde se o agente entrega u
 
 ### M4: ciclo fechado
 
-- Polling da API do GitHub para o estado do CI e do PR.
-- CI vermelho devolve o card ao agente com o log da falha, até 2 vezes; depois, `ci_failed_after_retries`.
-- Revisão com pedido de mudanças devolve o card ao agente com os comentários do PR.
-- Merge feito por uma pessoa no GitHub conclui o card.
+- O board tem 6 colunas: Backlog, Pronto, Executando, **Em revisão**, **Concluído** e Falhou. "Em revisão" junta as fases do PR numa etiqueta: CI rodando, CI vermelho, aguardando revisão, mudanças pedidas e aprovado.
+- Um observador no orquestrador consulta o GitHub a cada 30 segundos (`REVIEW_POLL_INTERVAL`) para cada card em revisão: o estado do PR, os checks do último commit e as revisões. Ele usa um token de instalação do App, renovado antes de expirar e revogado ao desligar. A decisão é uma função pura ([`internal/review/decide.go`](../internal/review/decide.go)), testada caso a caso.
+- CI vermelho devolve o card ao agente com o fim do log de cada check que falhou, até 2 vezes; na terceira, o card vai para Falhou com `ci_failed_after_retries`. Sem a permissão Actions: read, o agente recebe só o nome dos checks e roda os checks do repositório para achar a falha.
+- Só "Request changes" devolve o card ao agente, com o comentário geral e os comentários de linha; comentário solto não dispara nada. Cada revisão dispara uma vez só, e depois de 3 rodadas o card falha com `review_limit_reached`. A correção não conta nas tentativas do CI.
+- O run de correção é um run novo, de outro tipo (`fix_ci` ou `address_review`), com o mesmo agente congelado do run anterior. O worker clona o branch do PR, e o log ou os comentários entram no prompt entre `<feedback>` e `</feedback>`, tratados como dado, como o card. O publisher faz o commit no mesmo branch, push sem force e comenta no PR o que o agente fez. Push com force só existe para reimplementar um card cujo PR foi fechado.
+- Merge feito por uma pessoa conclui o card; PR fechado sem merge leva o card para Falhou com `pr_closed`. "Tentar de novo" num card que falhou com o PR aberto repete a última correção no mesmo PR, com uma rodada nova; sem PR, ou com o PR fechado, o card é implementado de novo.
 
 **Pronto quando:** o [ciclo do card](diagramas/ciclo-do-card.svg) funciona de ponta a ponta, inclusive os dois retornos.
 

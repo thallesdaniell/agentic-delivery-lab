@@ -14,6 +14,7 @@ import (
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/card"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/catalog"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/handoff"
+	"github.com/thallesdaniell/agentic-delivery-lab/internal/run"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/store"
 )
 
@@ -121,7 +122,7 @@ func TestBoardShowsColumnsAndEscapesCardText(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("status %d", rec.Code)
 	}
-	for _, want := range []string{"Backlog", "Pronto", "Executando", "PR aberto", "Falhou", "ADL-1", "Mover para Pronto", "sem agente"} {
+	for _, want := range []string{"Backlog", "Pronto", "Executando", "Em revisão", "Concluído", "Falhou", "ADL-1", "Mover para Pronto", "sem agente"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("faltou %q no board", want)
 		}
@@ -236,5 +237,35 @@ func TestCardPageAndCatalog(t *testing.T) {
 	}
 	if rec := do(t, h, "GET", "/static/htmx.min.js", nil, false); rec.Code != 200 {
 		t.Fatalf("htmx embutido: %d", rec.Code)
+	}
+}
+
+func TestBoardShowsThePRPhaseAndTheReworkAttempt(t *testing.T) {
+	f := newFake()
+	phase := store.PhaseAwaitingReview
+	pr, url := 3, "https://github.com/o/r/pull/3"
+	f.cards["ADL-1"].Status, f.cards["ADL-1"].Phase = store.CardInReview, &phase
+	f.cards["ADL-1"].PRNumber, f.cards["ADL-1"].PRURL = &pr, &url
+	kind, attempt := run.KindFixCI, 1
+	f.cards["ADL-2"].Status, f.cards["ADL-2"].RunKind, f.cards["ADL-2"].RunAttempt = store.CardRunning, &kind, &attempt
+	body := do(t, server(t, f), "GET", "/", nil, false).Body.String()
+	for _, want := range []string{"aguardando revisão", "phase-awaiting_review", "correção do CI 1/2"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("faltou %q no board", want)
+		}
+	}
+}
+
+func TestFailedCardWithOpenPRRetriesTheFix(t *testing.T) {
+	f := newFake()
+	code, detail := "ci_failed_after_retries", "o CI continuou vermelho"
+	url := "https://github.com/o/r/pull/3"
+	c := f.cards["ADL-1"]
+	c.Status, c.FailureCode, c.FailureDetail, c.PRURL, c.CIAttempts = store.CardFailed, &code, &detail, &url, 2
+	body := do(t, server(t, f), "GET", "/cards/ADL-1", nil, false).Body.String()
+	for _, want := range []string{"Tentar de novo", "Repete a última correção no mesmo PR", "ci_failed_after_retries", "2 de 2"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("faltou %q na página do card", want)
+		}
 	}
 }

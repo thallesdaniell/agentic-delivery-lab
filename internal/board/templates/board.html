@@ -18,6 +18,8 @@
         {{if .RunID}}<a href="/runs/{{.RunID}}">run #{{.RunID}}</a>{{end}}
         {{if .CostUSD}}<span>{{money .CostUSD}}</span>{{end}}
       </p>
+      {{if and (eq .Status "in_review") .Phase}}<p><span class="phase phase-{{phaseKey .Phase}}">{{phase .Phase}}</span></p>{{end}}
+      {{if or (eq .Status "ready") (eq .Status "running")}}{{with kind .RunKind .RunAttempt}}<p><span class="phase phase-rework">{{.}}</span></p>{{end}}{{end}}
       {{if .FailureCode}}<p class="failure"><code>{{str .FailureCode}}</code></p>{{end}}
       {{if .PRURL}}<p><a href="{{str .PRURL}}" rel="noreferrer">PR {{prnum .PRURL}}</a></p>{{end}}
       {{if and .Agent (or (eq .Status "backlog") (eq .Status "failed"))}}

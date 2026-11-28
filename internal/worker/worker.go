@@ -25,8 +25,10 @@ type Config struct {
 	// Spec é o agente congelado no run. Sem ele (run avulso), o agente do card é lido de CatalogDir.
 	Spec       *catalog.Spec
 	CatalogDir string
-	WorkDir    string
-	OutDir     string
+	// Task diz se o run implementa o card ou corrige o PR dele (CI vermelho ou revisão).
+	Task    run.Task
+	WorkDir string
+	OutDir  string
 	// BudgetCapUSD é o teto global: o agente nunca gasta mais que o menor entre o dele e este.
 	BudgetCapUSD float64
 	Timeout      time.Duration
@@ -88,9 +90,17 @@ func execute(ctx context.Context, cfg Config, res *run.Result) *run.Error {
 	log.Info("agente", "agent", spec.Agent, "agent_version", spec.AgentVersion, "skill", spec.Skill,
 		"skill_version", spec.SkillVersion, "model", spec.Model, "budget_usd", budget)
 
-	log.Info("clonando", "repo", c.Repo)
 	repoDir := filepath.Join(cfg.WorkDir, "repo")
-	g, err := gitops.Clone(ctx, c.Repo, repoDir)
+	var g gitops.Git
+	if cfg.Task.Kind.Rework() {
+		// A correção parte do que já está no PR, não da main.
+		log.Info("correção", "kind", cfg.Task.Kind, "attempt", cfg.Task.Attempt, "pr", cfg.Task.PRNumber)
+		log.Info("clonando", "repo", c.Repo, "branch", c.Branch())
+		g, err = gitops.CloneBranch(ctx, c.Repo, c.Branch(), repoDir)
+	} else {
+		log.Info("clonando", "repo", c.Repo)
+		g, err = gitops.Clone(ctx, c.Repo, repoDir)
+	}
 	if err != nil {
 		return run.Fail(run.FailureWorkspaceError, err.Error())
 	}
@@ -108,7 +118,7 @@ func execute(ctx context.Context, cfg Config, res *run.Result) *run.Error {
 	actx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 	out, rerr := agent.Run(actx, c, agent.Config{Model: spec.Model, BudgetUSD: budget, Workdir: repoDir,
-		Skill: spec.SkillContent, Tools: spec.Tools})
+		Skill: spec.SkillContent, Tools: spec.Tools, Task: cfg.Task})
 	res.CostUSD, res.NumTurns, res.Denials = out.CostUSD, out.NumTurns, out.Denials
 	if out.Handoff.Summary != "" {
 		h := out.Handoff

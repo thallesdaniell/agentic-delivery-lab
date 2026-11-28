@@ -28,11 +28,23 @@ var migrations embed.FS
 type CardStatus string
 
 const (
-	CardBacklog CardStatus = "backlog"
-	CardReady   CardStatus = "ready"
-	CardRunning CardStatus = "running"
-	CardPROpen  CardStatus = "pr_open"
-	CardFailed  CardStatus = "failed"
+	CardBacklog  CardStatus = "backlog"
+	CardReady    CardStatus = "ready"
+	CardRunning  CardStatus = "running"
+	CardInReview CardStatus = "in_review" // PR aberto: CI, revisão e merge
+	CardDone     CardStatus = "done"      // PR mergeado por uma pessoa
+	CardFailed   CardStatus = "failed"
+)
+
+// ReviewPhase é a fase do PR enquanto o card está em revisão.
+type ReviewPhase string
+
+const (
+	PhaseCIPending        ReviewPhase = "ci_pending"
+	PhaseCIFailed         ReviewPhase = "ci_failed"
+	PhaseAwaitingReview   ReviewPhase = "awaiting_review"
+	PhaseChangesRequested ReviewPhase = "changes_requested"
+	PhaseApproved         ReviewPhase = "approved"
 )
 
 // ErrActiveRun indica que o card já tem um run na fila ou rodando.
@@ -143,23 +155,36 @@ func activeAgent(ctx context.Context, tx pgx.Tx, name string) error {
 	return nil
 }
 
+// movable é o card travado para um movimento feito por uma pessoa.
+type movable struct {
+	agent        *string
+	status       CardStatus
+	failureCode  *string
+	reworkKind   *string
+	reworkInput  *string
+	ciAttempts   int
+	reviewRounds int
+}
+
 // lockMovable trava o card e confere que ele pode ser alterado: só no backlog ou depois de falhar.
-func lockMovable(ctx context.Context, tx pgx.Tx, cardID string) (agent *string, err error) {
-	var status CardStatus
-	err = tx.QueryRow(ctx, `SELECT status, agent FROM card WHERE id = $1 FOR UPDATE`, cardID).Scan(&status, &agent)
+func lockMovable(ctx context.Context, tx pgx.Tx, cardID string) (movable, error) {
+	var m movable
+	err := tx.QueryRow(ctx, `SELECT status, agent, failure_code, rework_kind, rework_feedback, ci_attempts, review_rounds
+		FROM card WHERE id = $1 FOR UPDATE`, cardID).Scan(&m.status, &m.agent, &m.failureCode, &m.reworkKind, &m.reworkInput,
+		&m.ciAttempts, &m.reviewRounds)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+		return m, ErrNotFound
 	}
 	if err != nil {
-		return nil, err
+		return m, err
 	}
-	switch status {
+	switch m.status {
 	case CardBacklog, CardFailed:
-		return agent, nil
+		return m, nil
 	case CardReady, CardRunning:
-		return nil, ErrActiveRun
+		return m, ErrActiveRun
 	default:
-		return nil, ErrInvalidTransition
+		return m, ErrInvalidTransition
 	}
 }
 
@@ -178,33 +203,82 @@ func (s *Store) AssignAgent(ctx context.Context, cardID, agentName string) error
 }
 
 // MarkReady move o card para Pronto e enfileira um run com o agente congelado.
-// Só sai do backlog ou de Falhou, e só com agente ativo.
+// Só sai do backlog ou de Falhou, e só com agente ativo. Um card que falhou com PR aberto
+// repete a última correção no mesmo PR; sem PR, ou com o PR fechado, o card é implementado de novo.
 func (s *Store) MarkReady(ctx context.Context, cardID string) (int64, error) {
 	var runID int64
 	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
-		agentName, err := lockMovable(ctx, tx, cardID)
+		m, err := lockMovable(ctx, tx, cardID)
 		if err != nil {
 			return err
 		}
-		if agentName == nil {
+		if m.agent == nil {
 			return ErrNoAgent
 		}
-		spec, err := loadSpec(ctx, tx, *agentName)
+		spec, err := loadSpec(ctx, tx, *m.agent)
 		if err != nil {
 			return err
 		}
-		raw, _ := json.Marshal(spec)
-		if _, err := tx.Exec(ctx, `UPDATE card SET status = 'ready', updated_at = now() WHERE id = $1`, cardID); err != nil {
+		var hasPR bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM delivery WHERE card_id = $1)`, cardID).Scan(&hasPR); err != nil {
 			return err
 		}
-		err = tx.QueryRow(ctx, `INSERT INTO run (card_id, agent, agent_version, skill_version, spec) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-			cardID, spec.Agent, spec.AgentVersion, spec.SkillVersion, raw).Scan(&runID)
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return ErrActiveRun
+		prClosed := m.failureCode != nil && *m.failureCode == string(run.FailurePRClosed)
+		if m.status == CardFailed && hasPR && !prClosed {
+			if m.reworkKind == nil || m.reworkInput == nil {
+				return ErrInvalidTransition
+			}
+			kind := run.Kind(*m.reworkKind)
+			attempt := m.ciAttempts
+			if kind == run.KindAddressReview {
+				attempt = m.reviewRounds
+			}
+			// Quem pede de novo depois de esgotar as tentativas ganha uma rodada nova.
+			if m.failureCode != nil {
+				attempt = 1
+			}
+			runID, err = enqueue(ctx, tx, cardID, spec, kind, *m.reworkInput, attempt, nil)
+			return err
 		}
+		if _, err := tx.Exec(ctx, `UPDATE card SET ci_attempts = 0, review_rounds = 0, last_review_id = NULL,
+			rework_kind = NULL, rework_feedback = NULL WHERE id = $1`, cardID); err != nil {
+			return err
+		}
+		runID, err = enqueue(ctx, tx, cardID, spec, run.KindImplement, "", 0, nil)
 		return err
 	})
+	return runID, err
+}
+
+// enqueue grava o run na fila e move o card para Pronto. Num run de correção, o card guarda
+// a correção e a contagem, para "Tentar de novo" repetir a mesma coisa.
+func enqueue(ctx context.Context, tx pgx.Tx, cardID string, spec catalog.Spec, kind run.Kind, feedback string, attempt int, reviewID *int64) (int64, error) {
+	raw, _ := json.Marshal(spec)
+	q := `UPDATE card SET status = 'ready', review_phase = NULL, failure_code = NULL, failure_detail = NULL, updated_at = now()`
+	args := []any{cardID}
+	switch kind {
+	case run.KindFixCI:
+		q += `, ci_attempts = $2, rework_kind = 'fix_ci', rework_feedback = $3`
+		args = append(args, attempt, feedback)
+	case run.KindAddressReview:
+		q += `, review_rounds = $2, rework_kind = 'address_review', rework_feedback = $3, last_review_id = COALESCE($4, last_review_id)`
+		args = append(args, attempt, feedback, reviewID)
+	}
+	if _, err := tx.Exec(ctx, q+` WHERE id = $1`, args...); err != nil {
+		return 0, err
+	}
+	var runID int64
+	var att *int
+	if kind.Rework() {
+		att = &attempt
+	}
+	err := tx.QueryRow(ctx, `INSERT INTO run (card_id, agent, agent_version, skill_version, spec, kind, feedback, attempt)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+		cardID, spec.Agent, spec.AgentVersion, spec.SkillVersion, raw, string(kind), nullable(feedback), att).Scan(&runID)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return 0, ErrActiveRun
+	}
 	return runID, err
 }
 
@@ -265,6 +339,7 @@ type Claimed struct {
 	RunID int64
 	Card  card.Card
 	Spec  catalog.Spec
+	Task  run.Task
 }
 
 // ClaimRun tira o run mais antigo da fila. Com SKIP LOCKED, dois orquestradores nunca pegam o mesmo.
@@ -272,15 +347,31 @@ func (s *Store) ClaimRun(ctx context.Context) (*Claimed, error) {
 	var cl Claimed
 	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
 		var ac, spec []byte
+		var kind string
+		var feedback, prURL *string
+		var attempt, prNumber *int
 		err := tx.QueryRow(ctx, `
-			SELECT r.id, c.id, c.title, c.objective, c.acceptance_criteria, c.repo, r.agent, r.spec
+			SELECT r.id, c.id, c.title, c.objective, c.acceptance_criteria, c.repo, r.agent, r.spec,
+				r.kind, r.feedback, r.attempt, d.pr_number, d.pr_url
 			FROM run r JOIN card c ON c.id = r.card_id
+			LEFT JOIN LATERAL (SELECT pr_number, pr_url FROM delivery WHERE card_id = c.id ORDER BY id DESC LIMIT 1) d ON true
 			WHERE r.status = 'queued'
 			ORDER BY r.id
 			LIMIT 1
-			FOR UPDATE OF r SKIP LOCKED`).Scan(&cl.RunID, &cl.Card.ID, &cl.Card.Title, &cl.Card.Objective, &ac, &cl.Card.Repo, &cl.Card.Agent, &spec)
+			FOR UPDATE OF r SKIP LOCKED`).Scan(&cl.RunID, &cl.Card.ID, &cl.Card.Title, &cl.Card.Objective, &ac, &cl.Card.Repo, &cl.Card.Agent, &spec,
+			&kind, &feedback, &attempt, &prNumber, &prURL)
 		if err != nil {
 			return err
+		}
+		cl.Task = run.Task{Kind: run.Kind(kind)}
+		if cl.Task.Kind.Rework() {
+			if prNumber == nil || feedback == nil {
+				return fmt.Errorf("run %d de correção sem PR ou sem entrada", cl.RunID)
+			}
+			cl.Task.Feedback, cl.Task.PRNumber, cl.Task.PRURL = *feedback, *prNumber, *prURL
+			if attempt != nil {
+				cl.Task.Attempt = *attempt
+			}
 		}
 		if err := json.Unmarshal(ac, &cl.Card.AcceptanceCriteria); err != nil {
 			return err
@@ -341,9 +432,11 @@ func (s *Store) FinishRun(ctx context.Context, runID int64, res run.Result, log 
 		if err != nil {
 			return fmt.Errorf("finalizando run %d: %w", runID, err)
 		}
-		status := CardFailed
+		status, phase := CardFailed, (*string)(nil)
 		if res.Status == run.StatusSucceeded {
-			status = CardPROpen
+			status = CardInReview
+			p := string(PhaseCIPending)
+			phase = &p
 			if res.PRNumber == 0 || res.PRURL == "" {
 				return fmt.Errorf("run %d terminou com sucesso sem PR", runID)
 			}
@@ -352,7 +445,7 @@ func (s *Store) FinishRun(ctx context.Context, runID int64, res run.Result, log 
 				return err
 			}
 		}
-		_, err = tx.Exec(ctx, `UPDATE card SET status = $2, updated_at = now() WHERE id = $1`, cardID, string(status))
+		_, err = tx.Exec(ctx, `UPDATE card SET status = $2, review_phase = $3, updated_at = now() WHERE id = $1`, cardID, string(status), phase)
 		return err
 	})
 }
@@ -389,27 +482,40 @@ func (s *Store) RecoverInterrupted(ctx context.Context) (int64, error) {
 // CardView é o card com o último run, para listar.
 type CardView struct {
 	card.Card
-	Status      CardStatus `json:"status"`
-	RunID       *int64     `json:"run_id,omitempty"`
-	RunStatus   *string    `json:"run_status,omitempty"`
-	FailureCode *string    `json:"failure_code,omitempty"`
-	CostUSD     *float64   `json:"cost_usd,omitempty"`
-	PRURL       *string    `json:"pr_url,omitempty"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	Status CardStatus `json:"status"`
+	// Phase é a fase do PR quando o card está em revisão.
+	Phase        *ReviewPhase `json:"review_phase,omitempty"`
+	CIAttempts   int          `json:"ci_attempts"`
+	ReviewRounds int          `json:"review_rounds"`
+	RunID        *int64       `json:"run_id,omitempty"`
+	RunStatus    *string      `json:"run_status,omitempty"`
+	RunKind      *run.Kind    `json:"run_kind,omitempty"`
+	RunAttempt   *int         `json:"run_attempt,omitempty"`
+	// FailureCode é o do card (ciclo de revisão) ou, se ele não tiver, o do último run.
+	FailureCode   *string   `json:"failure_code,omitempty"`
+	FailureDetail *string   `json:"failure_detail,omitempty"`
+	CostUSD       *float64  `json:"cost_usd,omitempty"`
+	PRNumber      *int      `json:"pr_number,omitempty"`
+	PRURL         *string   `json:"pr_url,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 const cardViewSelect = `
 	SELECT c.id, c.title, c.objective, c.acceptance_criteria, c.repo, COALESCE(c.agent, ''), c.status, c.updated_at,
-		r.id, r.status, r.failure_code, r.cost_usd::float8, d.pr_url
+		c.review_phase, c.ci_attempts, c.review_rounds,
+		r.id, r.status, r.kind, r.attempt, COALESCE(c.failure_code, r.failure_code), COALESCE(c.failure_detail, r.detail),
+		r.cost_usd::float8, d.pr_number, d.pr_url
 	FROM card c
 	LEFT JOIN LATERAL (SELECT * FROM run WHERE card_id = c.id ORDER BY id DESC LIMIT 1) r ON true
-	LEFT JOIN delivery d ON d.run_id = r.id`
+	LEFT JOIN LATERAL (SELECT pr_number, pr_url FROM delivery WHERE card_id = c.id ORDER BY id DESC LIMIT 1) d ON true`
 
 func scanCardView(row pgx.Row) (CardView, error) {
 	var v CardView
 	var ac []byte
 	if err := row.Scan(&v.ID, &v.Title, &v.Objective, &ac, &v.Repo, &v.Agent, &v.Status, &v.UpdatedAt,
-		&v.RunID, &v.RunStatus, &v.FailureCode, &v.CostUSD, &v.PRURL); err != nil {
+		&v.Phase, &v.CIAttempts, &v.ReviewRounds,
+		&v.RunID, &v.RunStatus, &v.RunKind, &v.RunAttempt, &v.FailureCode, &v.FailureDetail,
+		&v.CostUSD, &v.PRNumber, &v.PRURL); err != nil {
 		return v, err
 	}
 	return v, json.Unmarshal(ac, &v.AcceptanceCriteria)
@@ -438,6 +544,8 @@ type RunSummary struct {
 	ID           int64      `json:"id"`
 	CardID       string     `json:"card_id"`
 	Status       string     `json:"status"`
+	Kind         run.Kind   `json:"kind"`
+	Attempt      *int       `json:"attempt,omitempty"`
 	FailureCode  *string    `json:"failure_code,omitempty"`
 	Agent        *string    `json:"agent,omitempty"`
 	AgentVersion *string    `json:"agent_version,omitempty"`
@@ -454,11 +562,11 @@ type RunSummary struct {
 }
 
 const runSummarySelect = `
-	SELECT r.id, r.card_id, r.status, r.failure_code, r.agent, r.agent_version, r.skill_version, r.model,
+	SELECT r.id, r.card_id, r.status, r.kind, r.attempt, r.failure_code, r.agent, r.agent_version, r.skill_version, r.model,
 		r.cost_usd::float8, r.num_turns, r.duration_sec::float8, d.pr_number, d.pr_url, r.created_at, r.started_at, r.finished_at`
 
 func (r *RunSummary) dest() []any {
-	return []any{&r.ID, &r.CardID, &r.Status, &r.FailureCode, &r.Agent, &r.AgentVersion, &r.SkillVersion, &r.Model,
+	return []any{&r.ID, &r.CardID, &r.Status, &r.Kind, &r.Attempt, &r.FailureCode, &r.Agent, &r.AgentVersion, &r.SkillVersion, &r.Model,
 		&r.CostUSD, &r.NumTurns, &r.DurationSec, &r.PRNumber, &r.PRURL, &r.CreatedAt, &r.StartedAt, &r.FinishedAt}
 }
 
@@ -503,14 +611,16 @@ type RunDetail struct {
 	Denials      []string         `json:"permission_denials,omitempty"`
 	Log          *string          `json:"log,omitempty"`
 	ContainerID  *string          `json:"container_id,omitempty"`
+	// Feedback é a entrada de um run de correção: o log do CI ou os comentários da revisão.
+	Feedback *string `json:"feedback,omitempty"`
 }
 
 // GetRun devolve um run com handoff, arquivos, tools negadas e log.
 func (s *Store) GetRun(ctx context.Context, id int64) (*RunDetail, error) {
 	var r RunDetail
 	var h, files, denials []byte
-	dest := append(r.dest(), &r.CardTitle, &r.Detail, &h, &files, &denials, &r.Log, &r.ContainerID)
-	err := s.db.QueryRow(ctx, runSummarySelect+`, c.title, r.detail, r.handoff, r.changed_files, r.permission_denials, r.log, r.container_id
+	dest := append(r.dest(), &r.CardTitle, &r.Detail, &h, &files, &denials, &r.Log, &r.ContainerID, &r.Feedback)
+	err := s.db.QueryRow(ctx, runSummarySelect+`, c.title, r.detail, r.handoff, r.changed_files, r.permission_denials, r.log, r.container_id, r.feedback
 		FROM run r JOIN card c ON c.id = r.card_id LEFT JOIN delivery d ON d.run_id = r.id WHERE r.id = $1`, id).Scan(dest...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -529,6 +639,118 @@ func (s *Store) GetRun(ctx context.Context, id int64) (*RunDetail, error) {
 		}
 	}
 	return &r, nil
+}
+
+// Reviewing é um card em revisão, com o PR que o observador acompanha.
+type Reviewing struct {
+	CardID       string
+	Repo         string
+	PRNumber     int
+	PRURL        string
+	Phase        *ReviewPhase
+	CIAttempts   int
+	ReviewRounds int
+	LastReviewID *int64
+}
+
+// ReviewQueue devolve os cards em revisão com o PR mais recente de cada um.
+func (s *Store) ReviewQueue(ctx context.Context) ([]Reviewing, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT c.id, c.repo, d.pr_number, d.pr_url, c.review_phase, c.ci_attempts, c.review_rounds, c.last_review_id
+		FROM card c
+		JOIN LATERAL (SELECT pr_number, pr_url FROM delivery WHERE card_id = c.id ORDER BY id DESC LIMIT 1) d ON true
+		WHERE c.status = 'in_review'
+		ORDER BY c.updated_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Reviewing
+	for rows.Next() {
+		var r Reviewing
+		if err := rows.Scan(&r.CardID, &r.Repo, &r.PRNumber, &r.PRURL, &r.Phase, &r.CIAttempts, &r.ReviewRounds, &r.LastReviewID); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// inReview roda uma alteração só se o card ainda está em revisão. Se ele saiu dali no meio
+// (um run de correção entrou na fila, por exemplo), devolve ErrInvalidTransition e nada muda.
+func (s *Store) inReview(ctx context.Context, sql string, args ...any) error {
+	tag, err := s.db.Exec(ctx, sql, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrInvalidTransition
+	}
+	return nil
+}
+
+// SetReviewPhase grava a fase do PR de um card em revisão.
+func (s *Store) SetReviewPhase(ctx context.Context, cardID string, phase ReviewPhase) error {
+	return s.inReview(ctx, `UPDATE card SET review_phase = $2, updated_at = CASE WHEN review_phase IS DISTINCT FROM $2 THEN now() ELSE updated_at END
+		WHERE id = $1 AND status = 'in_review'`, cardID, string(phase))
+}
+
+// CompleteCard conclui o card: uma pessoa fez o merge do PR.
+func (s *Store) CompleteCard(ctx context.Context, cardID string) error {
+	return s.inReview(ctx, `UPDATE card SET status = 'done', review_phase = NULL, done_at = now(), updated_at = now()
+		WHERE id = $1 AND status = 'in_review'`, cardID)
+}
+
+// FailCard encerra o ciclo de revisão com um código: CI que não ficou verde, revisão que não convergiu ou PR fechado.
+func (s *Store) FailCard(ctx context.Context, cardID string, code run.FailureCode, detail string) error {
+	switch code {
+	case run.FailureCIFailedAfterRetries, run.FailureReviewLimitReached, run.FailurePRClosed:
+	default:
+		return fmt.Errorf("código %q não é de card", code)
+	}
+	return s.inReview(ctx, `UPDATE card SET status = 'failed', review_phase = NULL, failure_code = $2, failure_detail = $3, updated_at = now()
+		WHERE id = $1 AND status = 'in_review'`, cardID, string(code), nullable(detail))
+}
+
+// EnqueueRework devolve o card ao agente com o log do CI ou os comentários da revisão.
+// Conta a tentativa e recusa passar do limite; o run usa o mesmo agente congelado do run anterior.
+func (s *Store) EnqueueRework(ctx context.Context, cardID string, kind run.Kind, feedback string, reviewID *int64) (int64, error) {
+	if !kind.Rework() || feedback == "" {
+		return 0, fmt.Errorf("correção inválida: tipo %q, entrada vazia=%v", kind, feedback == "")
+	}
+	var runID int64
+	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		var status CardStatus
+		var ci, rounds int
+		err := tx.QueryRow(ctx, `SELECT status, ci_attempts, review_rounds FROM card WHERE id = $1 FOR UPDATE`, cardID).Scan(&status, &ci, &rounds)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if status != CardInReview {
+			return ErrInvalidTransition
+		}
+		attempt, limit := ci+1, run.MaxCIAttempts
+		if kind == run.KindAddressReview {
+			attempt, limit = rounds+1, run.MaxReviewRounds
+		}
+		if attempt > limit {
+			return ErrInvalidTransition
+		}
+		var raw []byte
+		if err := tx.QueryRow(ctx, `SELECT spec FROM run WHERE card_id = $1 AND spec IS NOT NULL ORDER BY id DESC LIMIT 1`, cardID).Scan(&raw); err != nil {
+			return fmt.Errorf("agente do último run: %w", err)
+		}
+		var spec catalog.Spec
+		if err := json.Unmarshal(raw, &spec); err != nil {
+			return err
+		}
+		runID, err = enqueue(ctx, tx, cardID, spec, kind, feedback, attempt, reviewID)
+		return err
+	})
+	return runID, err
 }
 
 // AgentView é um agente do catálogo, como está no banco.

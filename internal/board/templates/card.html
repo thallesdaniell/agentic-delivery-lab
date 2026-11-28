@@ -33,22 +33,34 @@
       <button class="button primary" hx-post="/cards/{{.Card.ID}}/ready" hx-target="#card-panel" hx-swap="outerHTML">
         {{if eq .Card.Status "failed"}}Tentar de novo{{else}}Mover para Pronto{{end}}
       </button>
-      <p class="hint">Cria um run na fila com o agente e a skill de agora.</p>
+      <p class="hint">{{if .RetryRework}}Repete a última correção no mesmo PR, com o agente e a skill de agora.{{else}}Cria um run na fila com o agente e a skill de agora.{{end}}</p>
       {{end}}
       {{else}}
       <p>{{if .Card.Agent}}<span class="tag">{{.Card.Agent}}</span>{{else}}–{{end}}</p>
       {{end}}
       {{if .Card.PRURL}}<p><a class="button" href="{{str .Card.PRURL}}" rel="noreferrer">Abrir PR {{prnum .Card.PRURL}}</a></p>{{end}}
+      {{if or (eq .Card.Status "in_review") .Card.CIAttempts .Card.ReviewRounds}}
+      <h2>Revisão</h2>
+      {{if and (eq .Card.Status "in_review") .Card.Phase}}<p><span class="phase phase-{{phaseKey .Card.Phase}}">{{phase .Card.Phase}}</span></p>{{end}}
+      <dl class="mini">
+        <div><dt>Correções do CI</dt><dd>{{.Card.CIAttempts}} de {{maxCI}}</dd></div>
+        <div><dt>Rodadas de revisão</dt><dd>{{.Card.ReviewRounds}} de {{maxReview}}</dd></div>
+      </dl>
+      {{end}}
+      {{if and (eq .Card.Status "failed") .Card.FailureCode}}
+      <div class="alert"><strong><code>{{str .Card.FailureCode}}</code></strong>{{if .Card.FailureDetail}}<p>{{str .Card.FailureDetail}}</p>{{end}}</div>
+      {{end}}
     </aside>
   </div>
   <h2>Runs</h2>
   {{if .Card.Runs}}
   <table>
-    <thead><tr><th scope="col">Run</th><th scope="col">Status</th><th scope="col">Agente</th><th scope="col">Custo</th><th scope="col">Turnos</th><th scope="col">Duração</th><th scope="col">Entrega</th><th scope="col">Criado</th></tr></thead>
+    <thead><tr><th scope="col">Run</th><th scope="col">Tipo</th><th scope="col">Status</th><th scope="col">Agente</th><th scope="col">Custo</th><th scope="col">Turnos</th><th scope="col">Duração</th><th scope="col">Entrega</th><th scope="col">Criado</th></tr></thead>
     <tbody>
     {{range .Card.Runs}}
     <tr>
       <td><a href="/runs/{{.ID}}">#{{.ID}}</a></td>
+      <td>{{with kind .Kind .Attempt}}{{.}}{{else}}implementação{{end}}</td>
       <td>{{template "status" .Status}}{{if .FailureCode}} <code>{{str .FailureCode}}</code>{{end}}</td>
       <td>{{str .Agent}} {{if .AgentVersion}}{{template "version" str .AgentVersion}}{{end}}</td>
       <td>{{money .CostUSD}}</td><td>{{int .NumTurns}}</td><td>{{secs .DurationSec}}</td>

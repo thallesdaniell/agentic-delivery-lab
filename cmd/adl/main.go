@@ -7,7 +7,7 @@
 //	adl card ready <id>             move o card para Pronto e enfileira um run
 //	adl card list                   lista os cards com o último run
 //	adl board                       sobe o board web (só fala com o Postgres)
-//	adl orchestrator                tira runs da fila, roda o worker e publica
+//	adl orchestrator                tira runs da fila, roda o worker, publica e acompanha os PRs
 //	adl worker                      roda o agente para um card (sem credencial do GitHub)
 //	adl publish                     abre o PR do resultado do worker, como o GitHub App
 package main
@@ -32,8 +32,10 @@ import (
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/card"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/catalog"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/dockerapi"
+	"github.com/thallesdaniell/agentic-delivery-lab/internal/githubapp"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/orchestrator"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/publish"
+	"github.com/thallesdaniell/agentic-delivery-lab/internal/review"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/run"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/store"
 	"github.com/thallesdaniell/agentic-delivery-lab/internal/worker"
@@ -104,6 +106,13 @@ func cmdWorker(ctx context.Context) error {
 			return fmt.Errorf("ADL_AGENT_SPEC inválido: %w", err)
 		}
 	}
+	// O tipo do run (implementar ou corrigir o PR) e a entrada da correção. Sem ela, o run implementa o card.
+	task := run.Task{Kind: run.KindImplement}
+	if raw := os.Getenv("ADL_RUN_TASK"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &task); err != nil || !task.Kind.Valid() {
+			return fmt.Errorf("ADL_RUN_TASK inválido: %v", err)
+		}
+	}
 	outDir := env("ADL_OUT_DIR", "/out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err
@@ -111,6 +120,7 @@ func cmdWorker(ctx context.Context) error {
 	res, err := worker.Run(ctx, worker.Config{
 		CardPath:     cardPath,
 		Spec:         spec,
+		Task:         task,
 		CatalogDir:   env("ADL_CATALOG_DIR", "/lab"),
 		WorkDir:      env("ADL_WORK_DIR", "/home/agent/work"),
 		OutDir:       outDir,
@@ -123,8 +133,9 @@ func cmdWorker(ctx context.Context) error {
 	return printResult(res)
 }
 
-func publishConfig(cardPath, outDir string) publish.Config {
+func publishConfig(cardPath, outDir string, task run.Task) publish.Config {
 	return publish.Config{
+		Task:           task,
 		CardPath:       cardPath,
 		OutDir:         outDir,
 		WorkDir:        env("ADL_WORK_DIR", os.TempDir()),
@@ -135,7 +146,7 @@ func publishConfig(cardPath, outDir string) publish.Config {
 }
 
 func cmdPublish(ctx context.Context) error {
-	res, err := publish.Run(ctx, publishConfig(env("ADL_CARD", "/lab/card.json"), env("ADL_OUT_DIR", "/out")))
+	res, err := publish.Run(ctx, publishConfig(env("ADL_CARD", "/lab/card.json"), env("ADL_OUT_DIR", "/out"), run.Task{Kind: run.KindImplement}))
 	if err != nil {
 		return err
 	}
@@ -298,8 +309,8 @@ func cmdOrchestrator(ctx context.Context) error {
 		log.Warn("runs interrompidos por reinício encerrados", "count", n)
 	}
 	timeout := envDuration("RUN_TIMEOUT", 20*time.Minute)
-	pub := func(ctx context.Context, cardPath, outDir string) (run.Result, error) {
-		return publish.Run(ctx, publishConfig(cardPath, outDir))
+	pub := func(ctx context.Context, cardPath, outDir string, task run.Task) (run.Result, error) {
+		return publish.Run(ctx, publishConfig(cardPath, outDir, task))
 	}
 	o := &orchestrator.Orchestrator{
 		Store: s,
@@ -318,8 +329,30 @@ func cmdOrchestrator(ctx context.Context) error {
 		Timeout: timeout + 5*time.Minute,
 		Log:     log,
 	}
-	log.Info("orquestrador no ar", "worker_image", env("WORKER_IMAGE", "agentic-delivery-lab:dev"))
+	// O observador acompanha os PRs dos cards em revisão: CI, revisões e merge.
+	tokens, err := appTokens()
+	if err != nil {
+		return err
+	}
+	defer tokens.Revoke(context.WithoutCancel(ctx))
+	w := &review.Watcher{GitHub: githubapp.Client{}, Store: s, Token: tokens.Token, Log: log.With("component", "review")}
+	reviewEvery := envDuration("REVIEW_POLL_INTERVAL", 30*time.Second)
+	go w.Loop(ctx, reviewEvery)
+	log.Info("orquestrador no ar", "worker_image", env("WORKER_IMAGE", "agentic-delivery-lab:dev"), "review_poll", reviewEvery.String())
 	return o.Loop(ctx, envDuration("POLL_INTERVAL", 3*time.Second))
+}
+
+// appTokens prepara os tokens de instalação do GitHub App para o observador de PRs.
+func appTokens() (*githubapp.TokenSource, error) {
+	keyPEM, err := os.ReadFile(env("GITHUB_APP_PRIVATE_KEY_PATH", "/run/secrets/github-app.pem"))
+	if err != nil {
+		return nil, fmt.Errorf("chave do GitHub App: %w", err)
+	}
+	key, err := githubapp.ParseKey(keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	return &githubapp.TokenSource{AppID: must("GITHUB_APP_ID"), InstallationID: must("GITHUB_APP_INSTALLATION_ID"), Key: key}, nil
 }
 
 func usage() {

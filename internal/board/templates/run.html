@@ -7,7 +7,7 @@
 {{define "run-panel"}}
 <section id="run-panel" class="panel"{{if .Active}} hx-get="/runs/{{.Run.ID}}/panel" hx-trigger="every 3s" hx-swap="outerHTML"{{end}}>
   <header class="panel-head">
-    <h1>Run #{{.Run.ID}} <small>{{.Run.CardTitle}}</small></h1>
+    <h1>Run #{{.Run.ID}} <small>{{.Run.CardTitle}}</small>{{with kind .Run.Kind .Run.Attempt}} <span class="phase phase-rework">{{.}}</span>{{end}}</h1>
     {{template "status" .Run.Status}}
   </header>
   {{if .Run.FailureCode}}
@@ -44,6 +44,9 @@
     <div><dt>Fim</dt><dd>{{when .Run.FinishedAt}}</dd></div>
     <div><dt>Entrega</dt><dd>{{if .Run.PRURL}}<a href="{{str .Run.PRURL}}" rel="noreferrer">PR {{prnum .Run.PRURL}}</a>{{else}}–{{end}}</dd></div>
   </dl>
+  {{with .Run.Feedback}}
+  <details class="raw feedback"><summary>Entrada da correção: o que o agente recebeu do PR</summary><pre class="log">{{.}}</pre></details>
+  {{end}}
   {{with .Run.Handoff}}
   <h2>Handoff</h2>
   <p class="meta">outcome <code>{{.Outcome}}</code></p>

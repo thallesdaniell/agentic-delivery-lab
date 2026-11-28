@@ -1,0 +1,14 @@
+{
+  "id": "ADL-4",
+  "title": "Renomear tarefa com PATCH /tasks/{id}",
+  "objective": "Permitir alterar o título de uma tarefa que já existe, sem mexer no estado de concluída.",
+  "acceptance_criteria": [
+    "PATCH /tasks/{id} com {\"title\": \"...\"} altera o título e devolve a tarefa atualizada",
+    "Tarefa inexistente devolve 404",
+    "Título vazio devolve 422",
+    "uv run ruff check ., uv run ruff format --check . e uv run pytest passam",
+    "Testes cobrindo os três casos e a tabela de rotas do README atualizada"
+  ],
+  "repo": "thallesdaniell/agentic-delivery-target",
+  "agent": "python-dev"
+}
